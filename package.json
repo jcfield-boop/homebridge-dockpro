@@ -7,13 +7,13 @@
   "description": "Homebridge plugin for SleepMe devices with basic thermostat functionality",
   "author": "Your Name",
   "license": "MIT",
-  "homepage": "https://github.com/yourusername/homebridge-sleepme-basic#readme",
+  "homepage": "https://github.com/jcfield-boop/homebridge-dockpro#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yourusername/homebridge-sleepme-basic.git"
+    "url": "git+https://github.com/jcfield-boop/homebridge-dockpro.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/homebridge-sleepme-basic/issues"
+    "url": "https://github.com/jcfield-boop/homebridge-dockpro/issues"
   },
   "keywords": [
     "homebridge-plugin",
