@@ -1,3 +1,4 @@
+# Definitely ignore all compiled files
 dist/
+dist/**/*
 node_modules/
-coverage/
