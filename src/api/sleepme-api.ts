@@ -61,6 +61,30 @@ export class SleepMeApi {
   }
   
   /**
+   * Test the API connection
+   * Returns true if successful, false otherwise
+   */
+  public async testConnection(): Promise<boolean> {
+    try {
+      this.logger.info('Testing API connection...', LogContext.API);
+      
+      // Try to get devices as a connection test
+      const devices = await this.getDevices();
+      
+      if (devices && devices.length > 0) {
+        this.logger.info(`Connection successful - found ${devices.length} devices`, LogContext.API);
+        return true;
+      } else {
+        this.logger.error('Connection test failed - no devices found', LogContext.API);
+        return false;
+      }
+    } catch (error) {
+      this.handleApiError('testConnection', error);
+      return false;
+    }
+  }
+  
+  /**
    * Get API statistics
    */
   public getStats(): ApiStats {
@@ -381,4 +405,103 @@ export class SleepMeApi {
         data: options.data,
         headers: {
           'Authorization': `Bearer ${this.apiToken}`,
-          'Content-Type':
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        timeout: 10000
+      });
+      
+      // Update stats
+      success = true;
+      this.stats.successfulRequests++;
+      
+      // Calculate response time and update average
+      const responseTime = Date.now() - startTime;
+      this.updateAverageResponseTime(responseTime);
+      
+      // Log the response
+      this.logger.api(options.method, options.url, response.status, 
+        options.method === 'GET' ? undefined : options.data);
+      
+      return response.data as T;
+    } catch (error) {
+      // Update stats
+      this.stats.failedRequests++;
+      this.stats.lastError = error instanceof Error ? error : new Error(String(error));
+      
+      // Handle rate limiting specially
+      if (axios.isAxiosError(error) && error.response?.status === 429) {
+        this.handleRateLimitExceeded();
+      }
+      
+      throw error;
+    } finally {
+      // Track rate limiting
+      this.trackRequest();
+    }
+  }
+  
+  /**
+   * Apply rate limiting before making a request
+   */
+  private async applyRateLimit(): Promise<void> {
+    const now = Date.now();
+    
+    // Check if we need to reset the rate limit counter (1 minute has passed)
+    if (now - SleepMeApi.requestTracking.lastReset >= 60000) {
+      SleepMeApi.requestTracking.count = 0;
+      SleepMeApi.requestTracking.lastReset = now;
+    }
+    
+    // Check if we've hit the rate limit
+    if (SleepMeApi.requestTracking.count >= MAX_REQUESTS_PER_MINUTE) {
+      // Calculate time until reset
+      const timeUntilReset = 60000 - (now - SleepMeApi.requestTracking.lastReset);
+      this.logger.debug(`Rate limit reached, waiting ${timeUntilReset}ms`, LogContext.API);
+      
+      // Wait until rate limit resets
+      await new Promise(resolve => setTimeout(resolve, timeUntilReset + 100));
+      
+      // Reset tracking
+      SleepMeApi.requestTracking.count = 0;
+      SleepMeApi.requestTracking.lastReset = Date.now();
+    }
+    
+    // Enforce minimum delay between requests
+    const timeSinceLastRequest = now - SleepMeApi.requestTracking.lastRequest;
+    if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
+      const delay = MIN_REQUEST_INTERVAL - timeSinceLastRequest;
+      this.logger.verbose(`Enforcing minimum request delay: ${delay}ms`, LogContext.API);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  
+  /**
+   * Track a request for rate limiting
+   */
+  private trackRequest(): void {
+    SleepMeApi.requestTracking.count++;
+    SleepMeApi.requestTracking.lastRequest = Date.now();
+  }
+  
+  /**
+   * Handle rate limit exceeded error
+   */
+  private handleRateLimitExceeded(): void {
+    this.logger.warn('API rate limit exceeded', LogContext.API);
+    // Force a longer delay for the next request
+    SleepMeApi.requestTracking.count = MAX_REQUESTS_PER_MINUTE;
+  }
+  
+  /**
+   * Update the average response time
+   */
+  private updateAverageResponseTime(newResponseTime: number): void {
+    if (this.stats.averageResponseTime === 0) {
+      this.stats.averageResponseTime = newResponseTime;
+    } else {
+      // Simple moving average calculation
+      this.stats.averageResponseTime = 
+        (this.stats.averageResponseTime * 0.9) + (newResponseTime * 0.1);
+    }
+  }

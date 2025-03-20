@@ -1,3 +1,116 @@
+/**
+ * SleepMe Thermostat Accessory
+ * This class handles the HomeKit thermostat interface and communicates
+ * with the SleepMe device via the API client
+ */
+import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
+import { SleepMePlatform } from './platform.js';
+import { SleepMeApi } from './sleepme-api.js';
+import { ThermalStatus, PowerState } from './api/types.js';
+import { LogContext } from './utils/logger.js';
+import { MIN_TEMPERATURE_C, MAX_TEMPERATURE_C, TEMPERATURE_STEP } from './settings.js';
+
+/**
+ * SleepMe Thermostat Accessory
+ * This class manages the HomeKit thermostat interface for a SleepMe device.
+ */
+export class SleepMeAccessory {
+  // HomeKit services
+  private service: Service;
+  
+  // Device state
+  private currentTemperature = 21; // Default value
+  private targetTemperature = 21;  // Default value
+  private currentHeatingState = 0; // OFF
+  private targetHeatingState = 0;  // OFF
+  private firmwareVersion = 'Unknown';
+  
+  // Device properties
+  private readonly deviceId: string;
+  private readonly displayName: string;
+  
+  // Update control
+  private isUpdating = false;
+  private lastUpdateTime = 0;
+  private statusUpdateTimer?: NodeJS.Timeout;
+  private pendingUpdates = false;
+  
+  // Constants from the platform
+  private readonly Characteristic;
+  
+  constructor(
+    private readonly platform: SleepMePlatform,
+    private readonly accessory: PlatformAccessory,
+    private readonly apiClient: SleepMeApi
+  ) {
+    // Store references to Characteristic for convenience
+    this.Characteristic = this.platform.Characteristic;
+    
+    // Get device ID from accessory context
+    this.deviceId = this.accessory.context.device?.id || '';
+    this.displayName = this.accessory.displayName;
+    
+    if (!this.deviceId) {
+      this.platform.log.error(`Accessory missing device ID: ${this.displayName}`);
+      throw new Error(`Accessory missing device ID: ${this.displayName}`);
+    }
+    
+    // Set accessory information
+    this.accessory.getService(this.platform.Service.AccessoryInformation)!
+      .setCharacteristic(this.Characteristic.Manufacturer, 'Sleepme Inc.')
+      .setCharacteristic(this.Characteristic.Model, 'ChiliPad')
+      .setCharacteristic(this.Characteristic.SerialNumber, this.deviceId);
+
+    // Get or create the thermostat service
+    this.service = this.accessory.getService(this.platform.Service.Thermostat) || 
+      this.accessory.addService(this.platform.Service.Thermostat, this.displayName);
+
+    // Set up required thermostat characteristics
+    
+    // Current Temperature
+    this.service.getCharacteristic(this.Characteristic.CurrentTemperature)
+      .onGet(this.handleCurrentTemperatureGet.bind(this));
+    
+    // Target Temperature
+    this.service.getCharacteristic(this.Characteristic.TargetTemperature)
+      .setProps({
+        minValue: MIN_TEMPERATURE_C,
+        maxValue: MAX_TEMPERATURE_C,
+        minStep: TEMPERATURE_STEP,
+      })
+      .onGet(this.handleTargetTemperatureGet.bind(this))
+      .onSet(this.handleTargetTemperatureSet.bind(this));
+    
+    // Current Heating/Cooling State
+    this.service.getCharacteristic(this.Characteristic.CurrentHeatingCoolingState)
+      .onGet(this.handleCurrentHeatingStateGet.bind(this));
+    
+    // Target Heating/Cooling State
+    this.service.getCharacteristic(this.Characteristic.TargetHeatingCoolingState)
+      .onGet(this.handleTargetHeatingStateGet.bind(this))
+      .onSet(this.handleTargetHeatingStateSet.bind(this));
+    
+    // Temperature Display Units
+    const displayUnits = this.platform.temperatureUnit === 'C' 
+      ? this.Characteristic.TemperatureDisplayUnits.CELSIUS
+      : this.Characteristic.TemperatureDisplayUnits.FAHRENHEIT;
+    
+    this.service.getCharacteristic(this.Characteristic.TemperatureDisplayUnits)
+      .updateValue(displayUnits)
+      .onGet(() => displayUnits);
+    
+    // Initialize the device state
+    this.refreshDeviceStatus()
+      .catch(error => this.platform.log.error(
+        `Error initializing device status: ${error instanceof Error ? error.message : String(error)}`
+      ));
+    
+    // Set up polling interval
+    this.setupStatusPolling();
+    
+    this.platform.log.info(`Accessory initialized: ${this.displayName} (ID: ${this.deviceId})`);
+  }
+
   /**
    * Set up the status polling mechanism
    */
@@ -13,15 +126,13 @@
     this.statusUpdateTimer = setInterval(() => {
       this.refreshDeviceStatus().catch(error => {
         this.platform.log.error(
-          `Error updating device status: ${error instanceof Error ? error.message : String(error)}`,
-          LogContext.ACCESSORY
+          `Error updating device status: ${error instanceof Error ? error.message : String(error)}`
         );
       });
     }, intervalMs);
     
     this.platform.log.debug(
-      `Polling scheduled every ${this.platform.pollingInterval} seconds`,
-      LogContext.ACCESSORY
+      `Polling scheduled every ${this.platform.pollingInterval} seconds`
     );
   }
   
@@ -34,7 +145,7 @@
       this.statusUpdateTimer = undefined;
     }
     
-    this.platform.log.info(`Cleaned up accessory: ${this.displayName}`, LogContext.ACCESSORY);
+    this.platform.log.info(`Cleaned up accessory: ${this.displayName}`);
   }
   
   /**
@@ -43,7 +154,7 @@
   private async refreshDeviceStatus(): Promise<void> {
     // Prevent multiple concurrent updates
     if (this.isUpdating) {
-      this.platform.log.debug('Status update already in progress, skipping', LogContext.ACCESSORY);
+      this.platform.log.debug('Status update already in progress, skipping');
       this.pendingUpdates = true;
       return;
     }
@@ -54,8 +165,7 @@
     
     if (now - this.lastUpdateTime < minUpdateInterval) {
       this.platform.log.debug(
-        `Throttling status update (last update was ${now - this.lastUpdateTime}ms ago)`,
-        LogContext.ACCESSORY
+        `Throttling status update (last update was ${now - this.lastUpdateTime}ms ago)`
       );
       
       // Schedule an update after the throttle period
@@ -65,7 +175,7 @@
           if (this.pendingUpdates) {
             this.pendingUpdates = false;
             this.refreshDeviceStatus().catch(error => 
-              this.platform.log.error(`Deferred status update failed: ${error}`, LogContext.ACCESSORY)
+              this.platform.log.error(`Deferred status update failed: ${error}`)
             );
           }
         }, minUpdateInterval - (now - this.lastUpdateTime));
@@ -79,7 +189,7 @@
     this.pendingUpdates = false;
     
     try {
-      this.platform.log.debug(`Refreshing status for device ${this.deviceId}`, LogContext.ACCESSORY);
+      this.platform.log.debug(`Refreshing status for device ${this.deviceId}`);
       
       // Get the device status from the API
       const status = await this.apiClient.getDeviceStatus(this.deviceId);
@@ -87,14 +197,6 @@
       if (!status) {
         throw new Error(`Failed to get status for device ${this.deviceId}`);
       }
-      
-      // Log the entire status for debugging
-      this.platform.log.state(this.deviceId, {
-        currentTemp: status.currentTemperature,
-        targetTemp: status.targetTemperature,
-        thermalStatus: status.thermalStatus,
-        powerState: status.powerState
-      });
       
       // Update firmware version if available
       if (status.firmwareVersion && status.firmwareVersion !== this.firmwareVersion) {
@@ -142,14 +244,13 @@
     } catch (error) {
       // Log the error but don't throw - we want polling to continue
       this.platform.log.error(
-        `Failed to refresh device status: ${error instanceof Error ? error.message : String(error)}`,
-        LogContext.ACCESSORY
+        `Failed to refresh device status: ${error instanceof Error ? error.message : String(error)}`
       );
     } finally {
       this.isUpdating = false;
     }
   }
-  
+
   /**
    * Map thermal status to HomeKit heating/cooling state
    */
@@ -223,7 +324,7 @@
    * Handler for CurrentTemperature GET
    */
   private async handleCurrentTemperatureGet(): Promise<CharacteristicValue> {
-    this.platform.log.homekit('GET', 'CurrentTemperature', this.currentTemperature);
+    this.platform.log.debug(`GET CurrentTemperature: ${this.currentTemperature}`);
     return this.currentTemperature;
   }
   
@@ -231,7 +332,7 @@
    * Handler for TargetTemperature GET
    */
   private async handleTargetTemperatureGet(): Promise<CharacteristicValue> {
-    this.platform.log.homekit('GET', 'TargetTemperature', this.targetTemperature);
+    this.platform.log.debug(`GET TargetTemperature: ${this.targetTemperature}`);
     return this.targetTemperature;
   }
   
@@ -240,14 +341,13 @@
    */
   private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<void> {
     const newTemp = this.validateTemperature(value as number);
-    this.platform.log.homekit('SET', 'TargetTemperature', newTemp);
+    this.platform.log.debug(`SET TargetTemperature: ${newTemp}`);
     
     try {
       // If the device is off, turn it on with the new temperature
       if (this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF) {
         this.platform.log.info(
-          `Device is OFF, turning ON with temperature ${newTemp}°C`,
-          LogContext.ACCESSORY
+          `Device is OFF, turning ON with temperature ${newTemp}°C`
         );
         
         const success = await this.apiClient.turnDeviceOn(this.deviceId, newTemp);
@@ -278,15 +378,13 @@
       setTimeout(() => {
         this.refreshDeviceStatus().catch(error => {
           this.platform.log.error(
-            `Error updating device status after temperature change: ${error}`,
-            LogContext.ACCESSORY
+            `Error updating device status after temperature change: ${error}`
           );
         });
       }, 2000);
     } catch (error) {
       this.platform.log.error(
-        `Failed to set target temperature: ${error instanceof Error ? error.message : String(error)}`,
-        LogContext.ACCESSORY
+        `Failed to set target temperature: ${error instanceof Error ? error.message : String(error)}`
       );
       
       // Restore the previous target temperature in HomeKit
@@ -301,7 +399,7 @@
    * Handler for CurrentHeatingCoolingState GET
    */
   private async handleCurrentHeatingStateGet(): Promise<CharacteristicValue> {
-    this.platform.log.homekit('GET', 'CurrentHeatingCoolingState', this.getHeatingStateName(this.currentHeatingState));
+    this.platform.log.debug(`GET CurrentHeatingCoolingState: ${this.getHeatingStateName(this.currentHeatingState)}`);
     return this.currentHeatingState;
   }
   
@@ -309,7 +407,7 @@
    * Handler for TargetHeatingCoolingState GET
    */
   private async handleTargetHeatingStateGet(): Promise<CharacteristicValue> {
-    this.platform.log.homekit('GET', 'TargetHeatingCoolingState', this.getHeatingStateName(this.targetHeatingState));
+    this.platform.log.debug(`GET TargetHeatingCoolingState: ${this.getHeatingStateName(this.targetHeatingState)}`);
     return this.targetHeatingState;
   }
   
@@ -318,7 +416,7 @@
    */
   private async handleTargetHeatingStateSet(value: CharacteristicValue): Promise<void> {
     const newState = value as number;
-    this.platform.log.homekit('SET', 'TargetHeatingCoolingState', this.getHeatingStateName(newState));
+    this.platform.log.debug(`SET TargetHeatingCoolingState: ${this.getHeatingStateName(newState)}`);
     
     try {
       let success = false;
@@ -376,8 +474,7 @@
         setTimeout(() => {
           this.refreshDeviceStatus().catch(error => {
             this.platform.log.error(
-              `Error updating device status after state change: ${error}`,
-              LogContext.ACCESSORY
+              `Error updating device status after state change: ${error}`
             );
           });
         }, 2000);
@@ -386,8 +483,7 @@
       }
     } catch (error) {
       this.platform.log.error(
-        `Failed to set target heating state: ${error instanceof Error ? error.message : String(error)}`,
-        LogContext.ACCESSORY
+        `Failed to set target heating state: ${error instanceof Error ? error.message : String(error)}`
       );
       
       // Restore the previous target state in HomeKit
@@ -404,8 +500,7 @@
   private validateTemperature(temperature: number): number {
     if (typeof temperature !== 'number' || isNaN(temperature)) {
       this.platform.log.warn(
-        `Invalid temperature value: ${temperature}, using current target ${this.targetTemperature}°C`,
-        LogContext.ACCESSORY
+        `Invalid temperature value: ${temperature}, using current target ${this.targetTemperature}°C`
       );
       return this.targetTemperature;
     }
@@ -413,16 +508,14 @@
     // Constrain to valid range
     if (temperature < MIN_TEMPERATURE_C) {
       this.platform.log.warn(
-        `Temperature ${temperature}°C below minimum, using ${MIN_TEMPERATURE_C}°C`,
-        LogContext.ACCESSORY
+        `Temperature ${temperature}°C below minimum, using ${MIN_TEMPERATURE_C}°C`
       );
       return MIN_TEMPERATURE_C;
     }
     
     if (temperature > MAX_TEMPERATURE_C) {
       this.platform.log.warn(
-        `Temperature ${temperature}°C above maximum, using ${MAX_TEMPERATURE_C}°C`,
-        LogContext.ACCESSORY
+        `Temperature ${temperature}°C above maximum, using ${MAX_TEMPERATURE_C}°C`
       );
       return MAX_TEMPERATURE_C;
     }
@@ -451,127 +544,4 @@
         return `UNKNOWN(${state})`;
     }
   }
- * SleepMe Thermostat Accessory
- * This class handles the HomeKit thermostat interface and communicates
- * with the SleepMe device via the API client
- */
-import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
-import { SleepMePlatform } from './platform.js';
-import { SleepMeApi } from './api/sleepme-api.js';
-import { DeviceStatus, ThermalStatus, PowerState } from './api/types.js';
-import { LogContext } from './utils/logger.js';
-import { MIN_TEMPERATURE_C, MAX_TEMPERATURE_C, TEMPERATURE_STEP } from './settings.js';
-
-/**
- * SleepMe Thermostat Accessory
- * This class manages the HomeKit thermostat interface for a SleepMe device.
- * It handles all HomeKit characteristic interactions and synchronizes
- * state with the physical device via the API client.
- */
-export class SleepMeAccessory {
-  // HomeKit services
-  private service: Service;
-  
-  // Device state
-  private currentTemperature = 21; // Default value
-  private targetTemperature = 21;  // Default value
-  private currentHeatingState = 0; // OFF
-  private targetHeatingState = 0;  // OFF
-  private firmwareVersion = 'Unknown';
-  
-  // Device properties
-  private readonly deviceId: string;
-  private readonly displayName: string;
-  
-  // Update control
-  private isUpdating = false;
-  private lastUpdateTime = 0;
-  private statusUpdateTimer?: NodeJS.Timeout;
-  private pendingUpdates = false;
-  
-  // Constants from the platform
-  private readonly Characteristic;
-  
-  constructor(
-    private readonly platform: SleepMePlatform,
-    private readonly accessory: PlatformAccessory,
-    private readonly apiClient: SleepMeApi
-  ) {
-    // Store references to Characteristic for convenience
-    this.Characteristic = this.platform.Characteristic;
-    
-    // Get device ID from accessory context
-    this.deviceId = this.accessory.context.device?.id || '';
-    this.displayName = this.accessory.displayName;
-    
-    if (!this.deviceId) {
-      this.platform.log.error(`Accessory missing device ID: ${this.displayName}`, LogContext.ACCESSORY);
-      throw new Error(`Accessory missing device ID: ${this.displayName}`);
-    }
-    
-    // Set accessory information
-    this.accessory.getService(this.platform.Service.AccessoryInformation)!
-      .setCharacteristic(this.Characteristic.Manufacturer, 'Sleepme Inc.')
-      .setCharacteristic(this.Characteristic.Model, 'ChiliPad')
-      .setCharacteristic(this.Characteristic.SerialNumber, this.deviceId);
-
-    // Get or create the thermostat service
-    this.service = this.accessory.getService(this.platform.Service.Thermostat) || 
-      this.accessory.addService(this.platform.Service.Thermostat, this.displayName);
-
-    // Set up required thermostat characteristics
-    
-    // Current Temperature
-    this.service.getCharacteristic(this.Characteristic.CurrentTemperature)
-      .onGet(this.handleCurrentTemperatureGet.bind(this));
-    
-    // Target Temperature
-    this.service.getCharacteristic(this.Characteristic.TargetTemperature)
-      .setProps({
-        minValue: MIN_TEMPERATURE_C,
-        maxValue: MAX_TEMPERATURE_C,
-        minStep: TEMPERATURE_STEP,
-      })
-      .onGet(this.handleTargetTemperatureGet.bind(this))
-      .onSet(this.handleTargetTemperatureSet.bind(this));
-    
-    // Current Heating/Cooling State
-    this.service.getCharacteristic(this.Characteristic.CurrentHeatingCoolingState)
-      .onGet(this.handleCurrentHeatingStateGet.bind(this));
-    
-    // Target Heating/Cooling State
-    this.service.getCharacteristic(this.Characteristic.TargetHeatingCoolingState)
-      .setProps({
-        validValues: [
-          this.Characteristic.TargetHeatingCoolingState.OFF,
-          this.Characteristic.TargetHeatingCoolingState.HEAT,
-          this.Characteristic.TargetHeatingCoolingState.COOL,
-          this.Characteristic.TargetHeatingCoolingState.AUTO,
-        ],
-      })
-      .onGet(this.handleTargetHeatingStateGet.bind(this))
-      .onSet(this.handleTargetHeatingStateSet.bind(this));
-    
-    // Temperature Display Units
-    const displayUnits = this.platform.temperatureUnit === 'C' 
-      ? this.Characteristic.TemperatureDisplayUnits.CELSIUS
-      : this.Characteristic.TemperatureDisplayUnits.FAHRENHEIT;
-    
-    this.service.getCharacteristic(this.Characteristic.TemperatureDisplayUnits)
-      .updateValue(displayUnits)
-      .onGet(() => displayUnits);
-    
-    // Initialize the device state
-    this.refreshDeviceStatus()
-      .catch(error => this.platform.log.error(
-        `Error initializing device status: ${error instanceof Error ? error.message : String(error)}`,
-        LogContext.ACCESSORY
-      ));
-    
-    // Set up polling interval
-    this.setupStatusPolling();
-    
-    this.platform.log.info(
-      `Accessory initialized: ${this.displayName} (ID: ${this.deviceId})`, 
-      LogContext.ACCESSORY
-    );
+}
