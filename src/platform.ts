@@ -13,7 +13,6 @@ import {
   Service
 } from 'homebridge';
 import { SleepMeApi } from './api/sleepme-api.js';
-import { Device } from './api/types.js';
 import { SleepMeAccessory } from './accessory.js';
 import { EnhancedLogger, LogContext } from './utils/logger.js';
 import { PLATFORM_NAME, PLUGIN_NAME, DEFAULT_POLLING_INTERVAL } from './settings.js';

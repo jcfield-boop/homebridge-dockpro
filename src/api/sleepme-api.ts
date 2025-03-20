@@ -1,7 +1,7 @@
 /**
  * SleepMe API client implementation with robust error handling and rate limiting
  */
-import axios, { AxiosResponse, AxiosError } from 'axios';
+import axios, {AxiosError } from 'axios';
 import { 
   API_BASE_URL, 
   MIN_REQUEST_INTERVAL, 
