@@ -5,7 +5,7 @@
  */
 import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { SleepMePlatform } from './platform.js';
-import { SleepMeApi } from './sleepme-api.js';
+import { SleepMeApi } from './api/types.js';
 import { ThermalStatus, PowerState } from './api/types.js';
 import { LogContext } from './utils/logger.js';
 import { MIN_TEMPERATURE_C, MAX_TEMPERATURE_C, TEMPERATURE_STEP } from './settings.js';
