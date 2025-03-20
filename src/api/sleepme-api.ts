@@ -9,14 +9,12 @@ import {
 } from '../settings.js';
 import { 
   Device, 
-  DeviceStatus, 
-  DeviceUpdateSettings, 
-  ApiError, 
+  DeviceStatus,
   ApiStats, 
   ThermalStatus, 
   PowerState 
 } from './types.js';
-import { EnhancedLogger, LogContext } from '../utils/logger.js';
+import { EnhancedLogger, LogContext } from '../utils/utils-logger.js';
 
 // Static rate limiting - shared across all instances
 interface RequestTracking {
@@ -505,3 +503,139 @@ export class SleepMeApi {
         (this.stats.averageResponseTime * 0.9) + (newResponseTime * 0.1);
     }
   }
+  
+  /**
+   * Handle API errors
+   */
+  private handleApiError(context: string, error: unknown): void {
+    // Cast to Axios error if possible
+    const axiosError = error as AxiosError;
+    
+    // Details for the log
+    let errorMessage = '';
+    let responseStatus = 0;
+    let responseData = null;
+    
+    // Get error details
+    if (axios.isAxiosError(axiosError)) {
+      responseStatus = axiosError.response?.status || 0;
+      responseData = axiosError.response?.data;
+      errorMessage = axiosError.message;
+      
+      this.logger.error(
+        `API error in ${context}: ${errorMessage} (Status: ${responseStatus})`,
+        LogContext.API
+      );
+      
+      if (responseData) {
+        this.logger.debug(`Response data: ${JSON.stringify(responseData)}`, LogContext.API);
+      }
+    } else {
+      // Not an Axios error
+      errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error in ${context}: ${errorMessage}`, LogContext.API);
+    }
+  }
+  
+  /**
+   * Extract a temperature value from nested properties
+   */
+  private extractTemperature(data: Record<string, any>, paths: string[], defaultValue = 21): number {
+    for (const path of paths) {
+      const value = this.extractNestedValue(data, path);
+      if (typeof value === 'number' && !isNaN(value)) {
+        return value;
+      }
+    }
+    
+    return defaultValue;
+  }
+  
+  /**
+   * Extract a nested property value from an object
+   */
+  private extractNestedValue(obj: Record<string, any>, path: string): any {
+    const parts = path.split('.');
+    let value = obj;
+    
+    for (const part of parts) {
+      if (value === null || value === undefined || typeof value !== 'object') {
+        return undefined;
+      }
+      
+      value = value[part];
+    }
+    
+    return value;
+  }
+  
+  /**
+   * Extract thermal status from API response
+   */
+  private extractThermalStatus(data: Record<string, any>): ThermalStatus {
+    // Try to get thermal status from control object
+    const rawStatus = this.extractNestedValue(data, 'control.thermal_control_status') ||
+                      this.extractNestedValue(data, 'thermal_control_status');
+    
+    if (rawStatus) {
+      switch (String(rawStatus).toLowerCase()) {
+        case 'active':
+          return ThermalStatus.ACTIVE;
+        case 'heating':
+          return ThermalStatus.HEATING;
+        case 'cooling':
+          return ThermalStatus.COOLING;
+        case 'standby':
+          return ThermalStatus.STANDBY;
+        case 'off':
+          return ThermalStatus.OFF;
+        default:
+          this.logger.warn(`Unknown thermal status: ${rawStatus}`, LogContext.API);
+          return ThermalStatus.UNKNOWN;
+      }
+    }
+    
+    return ThermalStatus.UNKNOWN;
+  }
+  
+  /**
+   * Extract power state from API response
+   */
+  private extractPowerState(data: Record<string, any>): PowerState {
+    // Try different paths for power state
+    const thermalStatus = this.extractThermalStatus(data);
+    
+    // If we have a thermal status, infer power state
+    if (thermalStatus !== ThermalStatus.UNKNOWN) {
+      if (thermalStatus === ThermalStatus.OFF || thermalStatus === ThermalStatus.STANDBY) {
+        return PowerState.OFF;
+      } else {
+        return PowerState.ON;
+      }
+    }
+    
+    // Try to get from is_connected or other fields
+    const isConnected = this.extractNestedValue(data, 'status.is_connected') ||
+                        this.extractNestedValue(data, 'is_connected');
+    
+    if (typeof isConnected === 'boolean') {
+      return isConnected ? PowerState.ON : PowerState.OFF;
+    }
+    
+    return PowerState.UNKNOWN;
+  }
+  
+  /**
+   * Convert Celsius to Fahrenheit
+   */
+  private convertCtoF(celsius: number): number {
+    return (celsius * 9/5) + 32;
+  }
+  
+  /**
+   * Convert Fahrenheit to Celsius
+   */
+  private convertFtoC(fahrenheit: number): number {
+    return (fahrenheit - 32) * 5/9;
+  }
+}
