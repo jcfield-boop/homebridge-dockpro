@@ -30,7 +30,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "lint": "eslint ./src/**/*.ts",
+    "lint": "eslint --config eslint.config.cjs ./src/**/*.ts",
     "prepublishOnly": "npm run lint && npm run build",
     "watch": "tsc -w",
     "test": "jest"

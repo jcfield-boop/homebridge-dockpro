@@ -1,17 +1,15 @@
-// eslint.config.cjs
 const { FlatCompat } = require('@eslint/eslintrc');
-const { configs } = require('@eslint/js');
+const js = require('@eslint/js');
+
 const compat = new FlatCompat({
-    baseDirectory: __dirname,
-    resolvePluginsRelativeTo: __dirname,
-    recommendedConfig: configs.recommended,
+  baseDirectory: __dirname,
+  recommendedConfig: js.configs.recommended
 });
 
 module.exports = [
   {
-    ignores: ['dist/**', 'node_modules/**']
+    ignores: ['dist/**', 'node_modules/**', '*.js', '*.cjs']
   },
-  ...compat.extends('eslint:recommended'),
   ...compat.extends('plugin:@typescript-eslint/recommended'),
   {
     files: ['src/**/*.ts'],
@@ -26,7 +24,11 @@ module.exports = [
         clearTimeout: 'readonly',
         setInterval: 'readonly',
         clearInterval: 'readonly',
-        console: 'readonly'
+        console: 'readonly',
+        process: 'readonly',
+        __dirname: 'readonly',
+        module: 'readonly',
+        require: 'readonly',
       }
     },
     plugins: {
@@ -35,6 +37,7 @@ module.exports = [
     rules: {
       '@typescript-eslint/no-unused-vars': 'warn',
       '@typescript-eslint/no-explicit-any': 'off',
+      'no-undef': 'off'
     },
   },
 ];
