@@ -14,7 +14,7 @@ import {
   ThermalStatus, 
   PowerState 
 } from './types.js';
-import { EnhancedLogger, LogContext } from '../utils/utils-logger.js';
+import { EnhancedLogger, LogContext } from '../utils/logger.js';
 
 // Static rate limiting - shared across all instances
 interface RequestTracking {
