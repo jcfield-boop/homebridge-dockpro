@@ -385,7 +385,7 @@ export class SleepMeApi {
     await this.applyRateLimit();
     
     const startTime = Date.now();
-    let success = false;
+
     
     try {
       // Track request stats
