@@ -39,26 +39,6 @@
         "minimum": 30,
         "maximum": 300,
         "description": "How frequently to check device status (in seconds)"
-      },
-      "devices": {
-        "type": "array",
-        "title": "Device Overrides",
-        "description": "Optional: Override names for specific devices",
-        "items": {
-          "type": "object",
-          "properties": {
-            "id": {
-              "title": "Device ID",
-              "type": "string",
-              "description": "The device ID from the API"
-            },
-            "name": {
-              "title": "Custom Name",
-              "type": "string",
-              "description": "Custom name for this device"
-            }
-          }
-        }
       }
     },
     "required": ["apiToken"]

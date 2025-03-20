@@ -71,16 +71,16 @@ export class SleepMeAccessory {
     this.service.getCharacteristic(this.Characteristic.CurrentTemperature)
       .onGet(this.handleCurrentTemperatureGet.bind(this));
     
-    // Target Temperature
-    this.service.getCharacteristic(this.Characteristic.TargetTemperature)
-      .setProps({
-        minValue: MIN_TEMPERATURE_C,
-        maxValue: MAX_TEMPERATURE_C,
-        minStep: TEMPERATURE_STEP,
-      })
-      .onGet(this.handleTargetTemperatureGet.bind(this))
-      .onSet(this.handleTargetTemperatureSet.bind(this));
-    
+// Target Temperature - allow changes in any state
+this.service.getCharacteristic(this.Characteristic.TargetTemperature)
+  .setProps({
+    minValue: MIN_TEMPERATURE_C,
+    maxValue: MAX_TEMPERATURE_C,
+    minStep: TEMPERATURE_STEP,
+
+  })
+  .onGet(this.handleTargetTemperatureGet.bind(this))
+  .onSet(this.handleTargetTemperatureSet.bind(this));
     // Current Heating/Cooling State
     this.service.getCharacteristic(this.Characteristic.CurrentHeatingCoolingState)
       .onGet(this.handleCurrentHeatingStateGet.bind(this));
@@ -343,23 +343,30 @@ private async handleTargetTemperatureGet(): Promise<CharacteristicValue> {
 
 /**
  * Handler for TargetTemperature SET
+ * Modified to automatically turn on device and select appropriate mode
  */
 private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<void> {
   const newTemp = this.validateTemperature(value as number);
   this.platform.log.debug(`SET TargetTemperature: ${newTemp}`, LogContext.HOMEKIT);
   
   try {
-    // If the device is off, turn it on with the new temperature
-    if (this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF) {
+    // Always update the internal target temperature immediately
+    // This ensures HomeKit shows the correct value even if API call fails
+    this.targetTemperature = newTemp;
+    
+    // Determine if we need to turn on the device or just change temperature
+    const deviceIsOff = this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF;
+    
+    if (deviceIsOff) {
+      // Device is off, turn it on with the new temperature
       this.platform.log.info(
-        `Device is OFF, turning ON with temperature ${newTemp}°C`,
+        `Device is OFF, automatically turning ON with temperature ${newTemp}°C`,
         LogContext.ACCESSORY
       );
       
       const success = await this.apiClient.turnDeviceOn(this.deviceId, newTemp);
       if (success) {
-        // Update states
-        this.targetTemperature = newTemp;
+        // Update the target heating state to AUTO
         this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.AUTO;
         
         // Update HomeKit characteristics
@@ -373,9 +380,7 @@ private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<vo
     } else {
       // Device is already on, just update the temperature
       const success = await this.apiClient.setTemperature(this.deviceId, newTemp);
-      if (success) {
-        this.targetTemperature = newTemp;
-      } else {
+      if (!success) {
         throw new Error('Failed to set temperature');
       }
     }
@@ -395,14 +400,10 @@ private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<vo
       LogContext.ACCESSORY
     );
     
-    // Restore the previous target temperature in HomeKit
-    this.service.updateCharacteristic(
-      this.Characteristic.TargetTemperature,
-      this.targetTemperature
-    );
+    // No need to restore the previous target temperature in HomeKit
+    // as we've already updated our internal state to match the requested value
   }
 }
-
 /**
  * Handler for CurrentHeatingCoolingState GET
  */
