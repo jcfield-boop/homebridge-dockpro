@@ -30,7 +30,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "lint": "eslint .",
+    "lint": "eslint ./src --ext .ts",
     "prepublishOnly": "npm run lint && npm run build",
     "watch": "tsc -w",
     "test": "jest"
