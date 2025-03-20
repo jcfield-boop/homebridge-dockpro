@@ -26,19 +26,27 @@
         "enumNames": ["Celsius (°C)", "Fahrenheit (°F)"],
         "description": "Select preferred temperature unit"
       },
-      "debugMode": {
-        "title": "Debug Mode",
-        "type": "boolean",
-        "default": false,
-        "description": "Enable verbose logging for troubleshooting"
-      },
-      "pollingInterval": {
-        "title": "Polling Interval",
-        "type": "integer",
-        "default": 60,
-        "minimum": 30,
-        "maximum": 300,
-        "description": "How frequently to check device status (in seconds)"
+      "advanced": {
+        "type": "object",
+        "title": "Advanced Settings",
+        "expandable": true,
+        "expanded": false,
+        "properties": {
+          "debugMode": {
+            "title": "Debug Mode",
+            "type": "boolean",
+            "default": false,
+            "description": "Enable verbose logging for troubleshooting"
+          },
+          "pollingInterval": {
+            "title": "Polling Interval",
+            "type": "integer",
+            "default": 60,
+            "minimum": 30,
+            "maximum": 300,
+            "description": "How frequently to check device status (in seconds)"
+          }
+        }
       }
     },
     "required": ["apiToken"]

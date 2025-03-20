@@ -108,7 +108,8 @@ this.service.getCharacteristic(this.Characteristic.TargetTemperature)
     
     // Set up polling interval
     this.setupStatusPolling();
-    
+  // Set up improved behaviors for better HomeKit experience
+this.setupImprovedBehaviors();  
     this.platform.log.info(`Accessory initialized: ${this.displayName} (ID: ${this.deviceId})`, LogContext.ACCESSORY);
   }
   /**
@@ -557,6 +558,94 @@ private getHeatingStateName(state: number): string {
       return 'AUTO';
     default:
       return `UNKNOWN(${state})`;
+  }
+}
+/**
+ * Set up accessory with improved HomeKit behaviors
+ * This makes temperature changes work even when device is off
+ */
+private setupImprovedBehaviors(): void {
+  this.platform.log.debug('Setting up improved HomeKit behaviors', LogContext.ACCESSORY);
+  
+  // Listen for all changes to target temperature
+  this.service.getCharacteristic(this.Characteristic.TargetTemperature)
+    .on('set', (value, callback) => {
+      // First complete the HomeKit request
+      callback(null);
+      
+      // Then handle the temperature change and auto-activate as needed
+      this.handleTemperatureChangeWithAutoActivate(value).catch(error => {
+        this.platform.log.error(
+          `Error in auto-activate: ${error instanceof Error ? error.message : String(error)}`,
+          LogContext.ACCESSORY
+        );
+      });
+    });
+}
+/**
+ * Handle temperature changes with automatic device activation
+ * This allows changing temperature from any state, including OFF
+ */
+private async handleTemperatureChangeWithAutoActivate(value: CharacteristicValue): Promise<void> {
+  const newTemp = this.validateTemperature(value as number);
+  this.platform.log.debug(`Auto handling temperature change: ${newTemp}°C`, LogContext.ACCESSORY);
+  
+  // Update our internal target temperature
+  this.targetTemperature = newTemp;
+  
+  // Check if device is currently off
+  const deviceIsOff = this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF;
+  
+  try {
+    if (deviceIsOff) {
+      // If device is off, automatically turn it on first
+      this.platform.log.info(
+        `Device is OFF, auto-activating with temperature ${newTemp}°C`,
+        LogContext.ACCESSORY
+      );
+      
+      const success = await this.apiClient.turnDeviceOn(this.deviceId, newTemp);
+      if (success) {
+        // Update the target heating state to AUTO
+        this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.AUTO;
+        
+        // Update HomeKit characteristics to show device is now on
+        this.service.updateCharacteristic(
+          this.Characteristic.TargetHeatingCoolingState,
+          this.targetHeatingState
+        );
+        
+        // Also update current state to reflect activity
+        // If target temp > current temp, we're heating, otherwise cooling
+        this.currentHeatingState = 
+          newTemp > this.currentTemperature ? 
+          this.Characteristic.CurrentHeatingCoolingState.HEAT : 
+          this.Characteristic.CurrentHeatingCoolingState.COOL;
+          
+        this.service.updateCharacteristic(
+          this.Characteristic.CurrentHeatingCoolingState,
+          this.currentHeatingState
+        );
+      }
+    } else {
+      // Device is already on, just update the temperature
+      await this.apiClient.setTemperature(this.deviceId, newTemp);
+    }
+    
+    // Refresh the device status after a short delay
+    setTimeout(() => {
+      this.refreshDeviceStatus().catch(error => {
+        this.platform.log.error(
+          `Error updating device status after temp change: ${error}`,
+          LogContext.ACCESSORY
+        );
+      });
+    }, 2000);
+  } catch (error) {
+    this.platform.log.error(
+      `Auto-activate temperature change failed: ${error instanceof Error ? error.message : String(error)}`,
+      LogContext.ACCESSORY
+    );
   }
 }
 }  

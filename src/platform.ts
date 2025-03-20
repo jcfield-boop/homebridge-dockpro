@@ -58,10 +58,11 @@ import {
       this.debugMode = config.debugMode === true;
       this.log = new EnhancedLogger(logger, this.debugMode);
       
-      // Extract configuration options
-      this.temperatureUnit = (config.unit as string) || 'C';
-      this.pollingInterval = Math.max(30, Math.min(300, 
-        (config.pollingInterval as number) || DEFAULT_POLLING_INTERVAL));
+     // Extract configuration options
+this.temperatureUnit = (config.unit as string) || 'C';
+this.debugMode = config.advanced?.debugMode === true;
+this.pollingInterval = Math.max(30, Math.min(300, 
+  (config.advanced?.pollingInterval as number) || DEFAULT_POLLING_INTERVAL));
       
       // Validate API token
       if (!config.apiToken) {
