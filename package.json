@@ -1,7 +1,7 @@
 {
   "name": "homebridge-sleepme-basic",
   "displayName": "Homebridge SleepMe Basic",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "private": false,
   "description": "Homebridge plugin for SleepMe devices with basic thermostat functionality",
