@@ -410,7 +410,7 @@ export class SleepMeApi {
       });
       
       // Update stats
-      success = true;
+  
       this.stats.successfulRequests++;
       
       // Calculate response time and update average

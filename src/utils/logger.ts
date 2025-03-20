@@ -126,7 +126,7 @@ export class EnhancedLogger {
     if (data && this.debugMode) {
       try {
         this.verbose(`${method} ${endpoint} data: ${JSON.stringify(data)}`, LogContext.API);
-      } catch (error) {
+      } catch  {
         this.verbose(`${method} ${endpoint} data: [Cannot stringify data]`, LogContext.API);
       }
     }
