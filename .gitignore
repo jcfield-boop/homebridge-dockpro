@@ -1,0 +1,44 @@
+# Compiled output
+dist
+*.tsbuildinfo
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Dependency directories
+node_modules/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# IDE files
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.test
+
+# Debug files
+npm-debug.log*
+*.tgz
+
+# Cache directories
+.npm/
+.eslintcache
+.cache/
+
+# Homebridge test config
+test/homebridge-config/
