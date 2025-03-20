@@ -1,3 +1,4 @@
+// eslint.config.cjs
 const { FlatCompat } = require('@eslint/eslintrc');
 const { configs } = require('@eslint/js');
 const compat = new FlatCompat({
@@ -7,6 +8,9 @@ const compat = new FlatCompat({
 });
 
 module.exports = [
+  {
+    ignores: ['dist/**', 'node_modules/**']
+  },
   ...compat.extends('eslint:recommended'),
   ...compat.extends('plugin:@typescript-eslint/recommended'),
   {
@@ -17,6 +21,13 @@ module.exports = [
         project: './tsconfig.json',
         tsconfigRootDir: __dirname,
       },
+      globals: {
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+        console: 'readonly'
+      }
     },
     plugins: {
       '@typescript-eslint': require('@typescript-eslint/eslint-plugin'),
