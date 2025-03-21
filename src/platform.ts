@@ -14,6 +14,7 @@ import {
   } from 'homebridge';
   import { SleepMeApi } from './api/sleepme-api.js';
   import { SleepMeAccessory } from './accessory.js';
+  import { SleepMeScheduler, DeviceSchedule, ScheduledEvent } from './scheduler.js';
   import { EnhancedLogger, LogContext } from './utils/logger.js';
   import { PLATFORM_NAME, PLUGIN_NAME, DEFAULT_POLLING_INTERVAL } from './settings.js';
   
@@ -24,6 +25,7 @@ import {
   export class SleepMePlatform implements DynamicPlatformPlugin {
     public readonly Service: typeof Service;
     public readonly Characteristic: typeof Characteristic;
+    public readonly scheduler: SleepMeScheduler;
     
     // Cached accessories
     public readonly accessories: PlatformAccessory[] = [];
@@ -75,7 +77,13 @@ this.pollingInterval = Math.max(30, Math.min(300,
       
       // Initialize API client
       this.api = new SleepMeApi(config.apiToken as string, this.log);
-      
+// Initialize scheduler
+this.scheduler = new SleepMeScheduler(
+  this.api,
+  this.log,
+  this.homebridgeApi.user.persistPath() // This gives the path where data can be stored
+
+);
       this.log.info(
         `Initializing ${PLATFORM_NAME} platform with ${this.temperatureUnit === 'C' ? 'Celsius' : 'Fahrenheit'} ` +
         `units and ${this.pollingInterval}s polling interval`, 
@@ -86,19 +94,24 @@ this.pollingInterval = Math.max(30, Math.min(300,
       this.homebridgeApi.on('didFinishLaunching', () => {
         this.log.info('Homebridge finished launching, starting device discovery', LogContext.PLATFORM);
         this.discoverDevices();
-        
+          // Initialize schedules from config
+  this.initializeSchedules();
+  
+
         // Set up periodic discovery to catch new or changed devices
         this.discoveryTimer = setInterval(() => {
           this.discoverDevices();
         }, 12 * 60 * 60 * 1000); // Check every 12 hours
       });
       
-      // Clean up on shutdown
       this.homebridgeApi.on('shutdown', () => {
         this.log.info('Shutting down platform', LogContext.PLATFORM);
         if (this.discoveryTimer) {
           clearInterval(this.discoveryTimer);
         }
+        
+        // Clean up scheduler
+        this.scheduler.cleanup();
       });
     }
     
@@ -280,5 +293,108 @@ for (const device of devices) {
         );
       }
     }
+  /**
+ * Get devices for dynamic selection in config UI
+ */
+async getDynamicDeviceIds(): Promise<{ id: string; name: string }[]> {
+  this.log.info('Getting device list for config UI', LogContext.PLATFORM);
+  
+  try {
+    const devices = await this.api.getDevices();
+    return devices.map(device => ({
+      id: device.id,
+      name: device.name
+    }));
+  } catch (error) {
+    this.log.error(
+      `Error getting devices for config UI: ${error instanceof Error ? error.message : String(error)}`,
+      LogContext.PLATFORM
+    );
+    return [];
   }
+}
+/**
+ * Initialize schedules from configuration
+ */
+private initializeSchedules(): void {
+  const schedulerConfig = this.config.advanced?.scheduler;
+  
+  if (!schedulerConfig || !schedulerConfig.enabled) {
+    this.log.info('Scheduler not enabled in config, skipping initialization', LogContext.PLATFORM);
+    return;
+  }
+  
+  this.log.info('Initializing schedules from config', LogContext.PLATFORM);
+  
+  try {
+    // Process each device schedule
+    if (Array.isArray(schedulerConfig.schedules)) {
+      for (const deviceSchedule of schedulerConfig.schedules) {
+        const deviceId = deviceSchedule.deviceId;
+        
+        if (!deviceId) {
+          this.log.warn('Schedule missing device ID, skipping', LogContext.PLATFORM);
+          continue;
+        }
+        
+        // Create schedule structure
+        const schedule: DeviceSchedule = {
+          deviceId,
+          events: [],
+          enabled: true
+        };
+        
+        // Process schedule items
+        if (Array.isArray(deviceSchedule.scheduleItems)) {
+          for (const item of deviceSchedule.scheduleItems) {
+            if (!item.enabled) {
+              continue;
+            }
+            
+            // Convert day type to day array
+            let days: number[] = [];
+            switch (item.dayType) {
+              case 'everyday':
+                days = [0, 1, 2, 3, 4, 5, 6]; // All days
+                break;
+              case 'weekday':
+                days = [1, 2, 3, 4, 5]; // Monday to Friday
+                break;
+              case 'weekend':
+                days = [0, 6]; // Sunday and Saturday
+                break;
+              case 'specific':
+                days = [parseInt(item.specificDay, 10)];
+                break;
+            }
+            
+            // Create event
+            const event: ScheduledEvent = {
+              id: `evt_${Math.random().toString(36).substring(2, 15)}`,
+              enabled: true,
+              time: item.time,
+              temperature: item.temperature,
+              days,
+              warmHug: item.warmHug || false,
+              warmHugDuration: item.warmHugDuration || 20
+            };
+            
+            schedule.events.push(event);
+          }
+        }
+        
+        // Set the schedule
+        this.scheduler.setDeviceSchedule(schedule);
+        this.log.info(`Initialized schedule for device ${deviceId} with ${schedule.events.length} events`, LogContext.PLATFORM);
+      }
+    }
+  } catch (error) {
+    this.log.error(
+      `Error initializing schedules: ${error instanceof Error ? error.message : String(error)}`,
+      LogContext.PLATFORM
+    );
+  }
+}
+  }
+  
   

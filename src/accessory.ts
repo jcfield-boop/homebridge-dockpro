@@ -10,6 +10,7 @@ import { ThermalStatus, PowerState } from './api/types.js';
 import { LogContext } from './utils/logger.js';
 import { MIN_TEMPERATURE_C, MAX_TEMPERATURE_C, TEMPERATURE_STEP } from './settings.js';
 
+
 /**
  * SleepMe Thermostat Accessory
  * This class manages the HomeKit thermostat interface for a SleepMe device.
@@ -34,6 +35,7 @@ export class SleepMeAccessory {
   private lastUpdateTime = 0;
   private statusUpdateTimer?: NodeJS.Timeout;
   private pendingUpdates = false;
+  private scheduleTimer?: NodeJS.Timeout;
   
   // Constants from the platform
   private readonly Characteristic;
@@ -108,6 +110,9 @@ this.service.getCharacteristic(this.Characteristic.TargetTemperature)
     
     // Set up polling interval
     this.setupStatusPolling();
+  
+  // Set up schedule polling
+this.setupSchedulePolling();
     this.platform.log.info(`Accessory initialized: ${this.displayName} (ID: ${this.deviceId})`, LogContext.ACCESSORY);
   }
   /**
@@ -136,19 +141,50 @@ this.service.getCharacteristic(this.Characteristic.TargetTemperature)
       LogContext.ACCESSORY
     );
   }
-  
   /**
-   * Clean up resources when this accessory is removed
-   */
-  public cleanup(): void {
-    if (this.statusUpdateTimer) {
-      clearInterval(this.statusUpdateTimer);
-      this.statusUpdateTimer = undefined;
+ * Set up the schedule polling mechanism
+ */
+private setupSchedulePolling(): void {
+  // Check schedule status every 30 seconds
+  this.scheduleTimer = setInterval(() => {
+    const schedulerStatus = this.platform.scheduler.getSchedulerStatus(this.deviceId);
+    
+    // Log next scheduled event if available
+    if (schedulerStatus.nextEvent) {
+      this.platform.log.debug(
+        `Next scheduled event: ${schedulerStatus.nextEvent.time} ` +
+        `(${schedulerStatus.nextEvent.temperature}°C, in ${schedulerStatus.nextEvent.minutesUntil} minutes)`,
+        LogContext.ACCESSORY
+      );
     }
     
-    this.platform.log.info(`Cleaned up accessory: ${this.displayName}`, LogContext.ACCESSORY);
+    // Log active warm hug if available
+    if (schedulerStatus.activeWarmHug) {
+      this.platform.log.debug(
+        `Active warm hug: Step ${schedulerStatus.activeWarmHug.currentStep}/` +
+        `${schedulerStatus.activeWarmHug.totalSteps} to ${schedulerStatus.activeWarmHug.targetTemp}°C ` +
+        `by ${schedulerStatus.activeWarmHug.targetTime}`,
+        LogContext.ACCESSORY
+      );
+    }
+  }, 30000);
+}
+ /**
+ * Clean up resources when this accessory is removed
+ */
+public cleanup(): void {
+  if (this.statusUpdateTimer) {
+    clearInterval(this.statusUpdateTimer);
+    this.statusUpdateTimer = undefined;
   }
   
+  if (this.scheduleTimer) {
+    clearInterval(this.scheduleTimer);
+    this.scheduleTimer = undefined;
+  }
+  
+  this.platform.log.info(`Cleaned up accessory: ${this.displayName}`, LogContext.ACCESSORY);
+}
   /**
  * Refresh the device status from the API
  */
