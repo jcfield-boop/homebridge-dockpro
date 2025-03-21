@@ -31,6 +31,27 @@
         "type": "boolean",
         "default": false
       },
+      "devices": {
+        "title": "Device Configuration",
+        "type": "array",
+        "description": "Configure devices manually instead of discovering them through the API",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "title": "Device ID",
+              "type": "string",
+              "description": "Device ID from SleepMe (starts with 'zx-')"
+            },
+            "name": {
+              "title": "Custom Name", 
+              "type": "string",
+              "description": "Name to display in HomeKit"
+            }
+          },
+          "required": ["id"]
+        }
+      },
       "schedules": {
         "title": "Temperature Schedules",
         "type": "array",
@@ -169,7 +190,16 @@
           "type": "number"
         },
         "debugMode",
-        "verboseLogging"
+        "verboseLogging",
+        {
+          "key": "devices",
+          "type": "array",
+          "buttonText": "Add Device",
+          "items": [
+            "devices[].id",
+            "devices[].name"
+          ]
+        }
       ]
     }
   ]

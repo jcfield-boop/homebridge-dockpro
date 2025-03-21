@@ -159,23 +159,41 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   
   /**
    * Discover SleepMe devices and create accessories with staggered initialization
+   * Modified to use configured devices when available to reduce API calls
    */
   async discoverDevices(): Promise<void> {
     this.log.info('Starting device discovery...', LogContext.PLATFORM);
     
     try {
-      // Get devices from the API
-      const devices = await this.api.getDevices();
+      // Check if we have devices configured in config.json
+      let devices = [];
+      const configuredDevices = this.config.devices as Array<{id: string, name: string}> || [];
       
-      if (!devices || devices.length === 0) {
-        this.log.error(
-          'No SleepMe devices found. Check your API token and connectivity.',
-          LogContext.PLATFORM
-        );
-        return;
+      if (configuredDevices && configuredDevices.length > 0) {
+        // Use the devices from config instead of making an API call
+        this.log.info(`Using ${configuredDevices.length} devices from configuration`, LogContext.PLATFORM);
+        
+        devices = configuredDevices.map(device => ({
+          id: device.id,
+          name: device.name || `SleepMe Device (${device.id})`, // Provide a default name if not specified
+          attachments: [] // Add required fields with default values
+        }));
+      } else {
+        // Only make API call if no devices are configured
+        this.log.info('No devices in configuration, fetching from API...', LogContext.PLATFORM);
+        
+        devices = await this.api.getDevices();
+        
+        if (!devices || devices.length === 0) {
+          this.log.error(
+            'No SleepMe devices found. Check your API token and connectivity.',
+            LogContext.PLATFORM
+          );
+          return;
+        }
       }
       
-      this.log.info(`Devices found: ${devices.length}`, LogContext.PLATFORM);
+      this.log.info(`Devices to initialize: ${devices.length}`, LogContext.PLATFORM);
       
       // Track which accessories are still active
       const activeDeviceIds = new Set<string>();
@@ -198,7 +216,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
         
         activeDeviceIds.add(device.id);
         
-        // Use device name directly from API
+        // Use device name directly from API or config
         const displayName = device.name;
         
         // Generate a unique id for this device
