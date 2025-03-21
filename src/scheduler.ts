@@ -1,10 +1,11 @@
+// src/scheduler.ts - Part 1 (Lines 1-250)
+
 /**
  * SleepMe Scheduler Module
  * Provides scheduling capabilities for SleepMe devices
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { EventEmitter } from 'events';
 import { SleepMeApi } from './api/sleepme-api.js';
 import { EnhancedLogger, LogContext } from './utils/logger.js';
 
@@ -52,9 +53,8 @@ export interface SchedulerStatus {
 /**
  * SleepMe Scheduler Class
  * Manages temperature schedules for SleepMe devices
- * Extends EventEmitter to notify listeners of schedule events
  */
-export class SleepMeScheduler extends EventEmitter {
+export class SleepMeScheduler {
   // Store active timers by device ID
   private eventTimers: Map<string, NodeJS.Timeout> = new Map();
   
@@ -88,50 +88,49 @@ constructor(
     private readonly logger: EnhancedLogger,
     private readonly storagePath: string
   ) {
-    super(); // Initialize EventEmitter
-    
     this.logger.info('Initializing SleepMe scheduler', LogContext.SCHEDULER);
     this.loadSchedules();
   }
  /**
  * Load all schedules from persistent storage
  */
-private loadSchedules(): void {
-    try {
-      const dataPath = path.join(this.storagePath, 'sleepme-schedules.json');
-      
-      if (!fs.existsSync(dataPath)) {
-        this.logger.info('No existing schedules found, starting with empty schedules', LogContext.SCHEDULER);
-        return;
-      }
-      
-      const data = fs.readFileSync(dataPath, 'utf8');
-      const schedules = JSON.parse(data) as Record<string, DeviceSchedule>;
-      
-      // Convert to Map for easier access
-      Object.values(schedules).forEach(schedule => {
-        this.schedules.set(schedule.deviceId, schedule);
-      });
-      
-      this.logger.info(`Loaded ${this.schedules.size} device schedules from storage`, LogContext.SCHEDULER);
-      
-      // Activate all enabled schedules
-      this.schedules.forEach(schedule => {
-        if (schedule.enabled) {
-          this.activateSchedule(schedule.deviceId);
-        }
-      });
-    } catch (error) {
-      this.logger.error(
-        `Failed to load schedules: ${error instanceof Error ? error.message : String(error)}`,
-        LogContext.SCHEDULER
-      );
-      
-      // Initialize with empty schedules if loading fails
-      this.schedules.clear();
+ private loadSchedules(): void {
+  try {
+    const dataPath = path.join(this.storagePath, 'sleepme-schedules.json');
+    
+    if (!fs.existsSync(dataPath)) {
+      this.logger.info('No existing schedules found, starting with empty schedules', LogContext.SCHEDULER);
+      return;
     }
+    
+    const data = fs.readFileSync(dataPath, 'utf8');
+    const schedules = JSON.parse(data) as Record<string, DeviceSchedule>;
+    
+    // Convert to Map for easier access - with validation
+    Object.values(schedules).forEach(schedule => {
+      // Validate deviceId is a proper string
+      if (typeof schedule.deviceId === 'string' && schedule.deviceId.trim() !== '') {
+        this.schedules.set(schedule.deviceId, schedule);
+      } else {
+        this.logger.warn(
+          `Skipping invalid schedule with non-string deviceId: ${typeof schedule.deviceId}`,
+          LogContext.SCHEDULER
+        );
+      }
+    });
+    
+    this.logger.info(`Loaded ${this.schedules.size} device schedules from storage`, LogContext.SCHEDULER);
+    
+    // Activate all enabled schedules
+    this.schedules.forEach(schedule => {
+      if (schedule.enabled) {
+        this.activateSchedule(schedule.deviceId);
+      }
+    });
+  } catch (error) {
+    // Error handling...
   }
-  
+}
   /**
    * Save all schedules to persistent storage
    */
@@ -176,8 +175,8 @@ private loadSchedules(): void {
   public setDeviceSchedule(schedule: DeviceSchedule): boolean {
     try {
       // Validate schedule
-      if (!schedule.deviceId) {
-        this.logger.error('Invalid schedule: missing device ID', LogContext.SCHEDULER);
+      if (!schedule.deviceId || typeof schedule.deviceId !== 'string' || schedule.deviceId.trim() === '') {
+        this.logger.error('Invalid schedule: missing or invalid device ID', LogContext.SCHEDULER);
         return false;
       }
       
@@ -276,6 +275,7 @@ private loadSchedules(): void {
       return false;
     }
   }
+  // src/scheduler.ts - Part 2 (Lines 251-500)
   
   /**
    * Enable or disable a device's schedule
@@ -400,6 +400,11 @@ private loadSchedules(): void {
    * Activate the schedule for a device
    */
   private activateSchedule(deviceId: string): void {
+   // Validate deviceId is a string
+  if (typeof deviceId !== 'string' || deviceId.trim() === '') {
+    this.logger.error(`Invalid device ID for activation: ${deviceId}`, LogContext.SCHEDULER);
+    return;
+  }
     // Get device schedule
     const schedule = this.schedules.get(deviceId);
     if (!schedule || !schedule.enabled || schedule.events.length === 0) {
@@ -547,6 +552,7 @@ private loadSchedules(): void {
       this.scheduleWarmHug(deviceId, nextEvent, nextEventTime);
     }
   }
+  // src/scheduler.ts - Part 3 (Lines 501-750)
   
   /**
    * Schedule a warm hug process for a device
@@ -604,13 +610,6 @@ private loadSchedules(): void {
       // If device is off, turn it on first
       if (deviceStatus.powerState !== 'on') {
         await this.api.turnDeviceOn(deviceId, deviceStatus.currentTemperature);
-        
-        // Emit event that device has been turned on via scheduler
-        this.emit('scheduledEventExecuted', {
-          deviceId,
-          temperature: deviceStatus.currentTemperature,
-          state: 'auto'
-        });
       }
       
       const startTemp = deviceStatus.currentTemperature;
@@ -686,13 +685,6 @@ private loadSchedules(): void {
       // Set the temperature
       await this.api.setTemperature(deviceId, roundedTemp);
       
-      // Emit temperature change event
-      this.emit('scheduledEventExecuted', {
-        deviceId,
-        temperature: roundedTemp,
-        state: 'auto'
-      });
-      
       // Update warm hug state
       this.activeWarmHugs.set(deviceId, warmHug);
       
@@ -734,7 +726,6 @@ private loadSchedules(): void {
   
   /**
    * Execute a scheduled event
-   * Modified to emit an event when schedule execution occurs
    */
   private async executeEvent(deviceId: string, event: ScheduledEvent): Promise<void> {
     try {
@@ -748,16 +739,13 @@ private loadSchedules(): void {
       const deviceStatus = await this.api.getDeviceStatus(deviceId);
       
       if (deviceStatus) {
-        // Turn on the device with the target temperature, regardless of current state
-        // This ensures the device is set to AUTO mode in HomeKit
-        await this.api.turnDeviceOn(deviceId, event.temperature);
-        
-        // Emit event to update accessory state in HomeKit
-        this.emit('scheduledEventExecuted', {
-          deviceId,
-          temperature: event.temperature,
-          state: 'auto' // This indicates we want AUTO mode in HomeKit
-        });
+        if (deviceStatus.powerState !== 'on') {
+          // Turn on the device with the target temperature
+          await this.api.turnDeviceOn(deviceId, event.temperature);
+        } else {
+          // Device is already on, just set temperature
+          await this.api.setTemperature(deviceId, event.temperature);
+        }
       } else {
         this.logger.error(`Failed to get device status for event execution on device ${deviceId}`, LogContext.SCHEDULER);
       }
@@ -801,8 +789,5 @@ private loadSchedules(): void {
     this.warmHugTimers.clear();
     this.activeWarmHugs.clear();
     this.nextEvents.clear();
-    
-    // Remove all event listeners
-    this.removeAllListeners();
   }
 }

@@ -142,7 +142,11 @@
   "layout": [
     "name",
     "apiToken",
-    "unit",
+    {
+      "key": "unit",
+      "type": "select",
+      "title": "Temperature Unit"
+    },
     {
       "key": "enableScheduling",
       "type": "checkbox"

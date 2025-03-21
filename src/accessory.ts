@@ -293,9 +293,9 @@ public cleanup(): void {
 }
 
 /**
-   * Extract thermal status from API response
-   * Ensures correct display of current temperature regardless of device state
-   */
+ * Extract thermal status from API response
+ * Ensures correct display of current temperature regardless of device state
+ */
 private async refreshDeviceStatus(isInitialSetup = false): Promise<void> {
   // Prevent multiple concurrent updates
   if (this.isUpdating) {
@@ -361,12 +361,35 @@ private async refreshDeviceStatus(isInitialSetup = false): Promise<void> {
           );
         }
         
-        // For initial setup, adopt whatever temperature the device is set to
+        // For initial setup, adopt the device's target temperature but RESPECT CURRENT POWER STATE
         if (isInitialSetup) {
+          // Update target temperature
           this.targetTemperature = status.targetTemperature;
           this.service.updateCharacteristic(
             this.Characteristic.TargetTemperature,
             this.targetTemperature
+          );
+          
+          // Important change: Respect device's actual power state instead of forcing AUTO
+          const newTargetState = this.determineTargetHeatingState(status.thermalStatus, status.powerState);
+          this.targetHeatingState = newTargetState;
+          this.service.updateCharacteristic(
+            this.Characteristic.TargetHeatingCoolingState,
+            this.targetHeatingState
+          );
+          
+          // Set current heating state based on device status
+          this.currentHeatingState = this.mapThermalStatusToHeatingState(status.thermalStatus, status.powerState);
+          this.service.updateCharacteristic(
+            this.Characteristic.CurrentHeatingCoolingState,
+            this.currentHeatingState
+          );
+          
+          // Log the device's actual state during initialization
+          this.platform.log.info(
+            `Initializing device with status: ${status.thermalStatus}, ` +
+            `temp=${status.currentTemperature}°C, target=${status.targetTemperature}°C`,
+            LogContext.ACCESSORY
           );
         } else if (status.targetTemperature !== this.targetTemperature) {
           // After initialization, only update if changed externally
@@ -378,46 +401,17 @@ private async refreshDeviceStatus(isInitialSetup = false): Promise<void> {
         }
         
         // Update heating/cooling states based on thermal status and power state
-        const newHeatingState = this.mapThermalStatusToHeatingState(status.thermalStatus, status.powerState);
-        if (newHeatingState !== this.currentHeatingState) {
-          this.currentHeatingState = newHeatingState;
-          this.service.updateCharacteristic(
-            this.Characteristic.CurrentHeatingCoolingState,
-            this.currentHeatingState
-          );
-        }
-        // For initial setup, ensure we're in AUTO mode regardless of the device's current state
-        if (isInitialSetup) {
-          // Always set to AUTO mode in HomeKit for better UX
-          this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.AUTO;
-          this.service.updateCharacteristic(
-            this.Characteristic.TargetHeatingCoolingState,
-            this.targetHeatingState
-          );
-          
-          // If device is actually off, turn it on
-          if (status.powerState === PowerState.OFF || 
-              status.thermalStatus === ThermalStatus.OFF ||
-              status.thermalStatus === ThermalStatus.STANDBY) {
-            
-            this.platform.log.info(
-              `Initializing device in AUTO mode with temperature ${this.targetTemperature}°C`,
-              LogContext.ACCESSORY
+        if (!isInitialSetup) {
+          const newHeatingState = this.mapThermalStatusToHeatingState(status.thermalStatus, status.powerState);
+          if (newHeatingState !== this.currentHeatingState) {
+            this.currentHeatingState = newHeatingState;
+            this.service.updateCharacteristic(
+              this.Characteristic.CurrentHeatingCoolingState,
+              this.currentHeatingState
             );
-            
-            try {
-              // Turn on the device with current target temperature
-              await this.apiClient.turnDeviceOn(this.deviceId, this.targetTemperature);
-            } catch (error) {
-              this.platform.log.warn(
-                `Failed to turn on device during initialization: ${error instanceof Error ? error.message : String(error)}`,
-                LogContext.ACCESSORY
-              );
-              // Continue anyway - we'll try again on the next update
-            }
           }
-        } else {
-          // After initialization, update target heating state normally
+          
+          // Update target heating state if changed externally
           const newTargetState = this.determineTargetHeatingState(status.thermalStatus, status.powerState);
           if (newTargetState !== this.targetHeatingState) {
             this.targetHeatingState = newTargetState;
