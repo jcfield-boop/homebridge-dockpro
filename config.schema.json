@@ -58,7 +58,7 @@
               "required": true
             },
             "dayType": {
-              "title": "Days",
+              "title": "Repeat On",
               "type": "string",
               "enum": ["everyday", "weekday", "weekend", "specific"],
               "enumNames": ["Every Day", "Weekdays Only", "Weekends Only", "Specific Day"],
@@ -78,7 +78,7 @@
               "title": "Warm Hug",
               "type": "boolean",
               "default": false,
-              "description": "Gradually warm up your bed before the scheduled time. This feature slowly increases the temperature in small increments, creating a gentle and comfortable wake up environment that feels like a warm embrace and will (probably) wake you up."
+              "description": "Gradually warm up your bed before the scheduled time. The temperature will increase slowly in small increments, creating a gentle and comfortable pre-heated sleeping environment that feels like a warm embrace."
             },
             "warmHugDuration": {
               "title": "Warm Hug Duration",
@@ -101,7 +101,7 @@
         "default": 60,
         "minimum": 30,
         "maximum": 300,
-        "description": "How frequently to check device status (in seconds) - minimum 30 seconds, maximum 300 seconds"
+        "description": "How frequently to check device status (in seconds)"
       },
       "debugMode": {
         "title": "Debug Mode",
@@ -172,9 +172,5 @@
         "verboseLogging"
       ]
     }
-  ],
-  "schema:dynamic-device-id": {
-    "action": "getDynamicDeviceIds",
-    "label": "Select Device"
-  }
+  ]
 }

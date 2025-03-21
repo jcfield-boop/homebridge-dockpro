@@ -41,6 +41,10 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   public readonly pollingInterval: number;
   public readonly temperatureUnit: string;
   
+  // Temperature settings based on unit
+  public readonly minTemp: number;
+  public readonly maxTemp: number;
+  
   // Track managed accessories for cleanup
   private readonly accessoryInstances: Map<string, SleepMeAccessory> = new Map();
   
@@ -69,6 +73,15 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     // Set up enhanced logger with correct debug mode
     this.log = new EnhancedLogger(logger, this.debugMode);
     
+    // Initialize temperature ranges based on unit
+    if (this.temperatureUnit === 'F') {
+      this.minTemp = 55;  // 55°F (equivalent to ~13°C)
+      this.maxTemp = 115; // 115°F (equivalent to ~46°C)
+    } else {
+      this.minTemp = 13;  // 13°C
+      this.maxTemp = 46;  // 46°C
+    }
+    
     // Validate API token
     if (!config.apiToken) {
       this.log.error('API token missing from configuration! The plugin will not work.', LogContext.PLATFORM);
@@ -90,6 +103,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       `units and ${this.pollingInterval}s polling interval`, 
       LogContext.PLATFORM
     );
+    
     // When this event is fired, homebridge has restored all cached accessories
     this.homebridgeApi.on('didFinishLaunching', () => {
       this.log.info('Homebridge finished launching, starting device discovery', LogContext.PLATFORM);
@@ -113,6 +127,20 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       // Clean up scheduler
       this.scheduler.cleanup();
     });
+  }
+  
+  /**
+   * Convert from Celsius to Fahrenheit
+   */
+  public convertCtoF(celsius: number): number {
+    return (celsius * 9/5) + 32;
+  }
+  
+  /**
+   * Convert from Fahrenheit to Celsius
+   */
+  public convertFtoC(fahrenheit: number): number {
+    return (fahrenheit - 32) * 5/9;
   }
   
   /**
@@ -311,9 +339,9 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
    * Initialize schedules from configuration
    */
   private initializeSchedules(): void {
-    const schedulerSettings = this.config.schedulerSettings;
+
     
-    if (!schedulerSettings || !schedulerSettings.enabled) {
+    if (!this.config.enableScheduling) {
       this.log.info('Scheduler not enabled in config, skipping initialization', LogContext.PLATFORM);
       return;
     }
@@ -321,13 +349,16 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     this.log.info('Initializing schedules from config', LogContext.PLATFORM);
     
     try {
-      // Process each device schedule
-      if (Array.isArray(schedulerSettings.schedules)) {
-        for (const deviceSchedule of schedulerSettings.schedules) {
-          const deviceId = deviceSchedule.deviceId;
+      // Process each schedule item from config
+      if (Array.isArray(this.config.schedules)) {
+        for (const scheduleItem of this.config.schedules) {
+          // Get device ID from the first device in cache
+          const deviceId = this.accessories.length > 0 && this.accessories[0].context.device
+            ? this.accessories[0].context.device.id
+            : null;
           
           if (!deviceId) {
-            this.log.warn('Schedule missing device ID, skipping', LogContext.PLATFORM);
+            this.log.warn('No device available for scheduling, skipping', LogContext.PLATFORM);
             continue;
           }
           
@@ -337,52 +368,58 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
             events: [],
             enabled: true
           };
-         // Process schedule items
-         if (Array.isArray(deviceSchedule.scheduleItems)) {
-          for (const item of deviceSchedule.scheduleItems) {
-            // Convert day type to day array
-            let days: number[] = [];
-            switch (item.dayType) {
-              case 'everyday':
-                days = [0, 1, 2, 3, 4, 5, 6]; // All days
-                break;
-              case 'weekday':
-                days = [1, 2, 3, 4, 5]; // Monday to Friday
-                break;
-              case 'weekend':
-                days = [0, 6]; // Sunday and Saturday
-                break;
-              case 'specific':
-                // Convert string to number for specific day
-                days = [parseInt(item.specificDay, 10)];
-                break;
-            }
-            
-            // Create event
-            const event: ScheduledEvent = {
-              id: `evt_${Math.random().toString(36).substring(2, 15)}`,
-              enabled: true, // Default to enabled
-              time: item.time,
-              temperature: item.temperature,
-              days,
-              warmHug: item.warmHug || false,
-              warmHugDuration: item.warmHugDuration || 20
-            };
-            
-            schedule.events.push(event);
+          
+          // Convert days selection to array of day numbers
+          let days: number[] = [];
+          switch (scheduleItem.dayType) {
+            case 'everyday':
+              days = [0, 1, 2, 3, 4, 5, 6]; // All days
+              break;
+            case 'weekday':
+              days = [1, 2, 3, 4, 5]; // Monday to Friday
+              break;
+            case 'weekend':
+              days = [0, 6]; // Sunday and Saturday
+              break;
+            case 'specific':
+              // Convert string to number for specific day
+              days = [parseInt(scheduleItem.specificDay, 10)];
+              break;
           }
+          
+          // Temperature conversion if needed
+          let temperature = scheduleItem.temperature;
+          if (this.temperatureUnit === 'F') {
+            // Convert Fahrenheit to Celsius for internal use
+            temperature = this.convertFtoC(temperature);
+          }
+          
+          // Create event
+          const event: ScheduledEvent = {
+            id: `evt_${Math.random().toString(36).substring(2, 15)}`,
+            enabled: true,
+            time: scheduleItem.time,
+            temperature,
+            days,
+            warmHug: scheduleItem.warmHug || false,
+            warmHugDuration: parseInt(scheduleItem.warmHugDuration || '20', 10)
+          };
+          
+          schedule.events.push(event);
+          
+          // Set the schedule
+          this.scheduler.setDeviceSchedule(schedule);
+          this.log.info(
+            `Initialized schedule for device ${deviceId} with ${schedule.events.length} events`, 
+            LogContext.PLATFORM
+          );
         }
-        
-        // Set the schedule
-        this.scheduler.setDeviceSchedule(schedule);
-        this.log.info(`Initialized schedule for device ${deviceId} with ${schedule.events.length} events`, LogContext.PLATFORM);
       }
+    } catch (error) {
+      this.log.error(
+        `Error initializing schedules: ${error instanceof Error ? error.message : String(error)}`,
+        LogContext.PLATFORM
+      );
     }
-  } catch (error) {
-    this.log.error(
-      `Error initializing schedules: ${error instanceof Error ? error.message : String(error)}`,
-      LogContext.PLATFORM
-    );
   }
 }
-} 
