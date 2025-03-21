@@ -4,7 +4,6 @@
 import axios, {AxiosError } from 'axios';
 import { 
   API_BASE_URL, 
-  MIN_REQUEST_INTERVAL, 
   MAX_REQUESTS_PER_MINUTE 
 } from '../settings.js';
 import { 
@@ -375,7 +374,6 @@ private async makeRequest<T>(options: {
   
   return resultPromise;
 }
-
 /**
  * Execute a request with rate limiting
  */
@@ -384,61 +382,71 @@ private async executeRequest<T>(options: {
   url: string;
   data?: any;
 }): Promise<T> {
-  await this.applyRateLimit();
+  let retryCount = 0;
+  const maxRetries = 3;
   
-  const startTime = Date.now();
-  
-  try {
-    // Track request stats
-    this.stats.totalRequests++;
-    this.stats.lastRequest = new Date();
-    
-    const fullUrl = `${API_BASE_URL}${options.url}`;
-    
-    this.logger.api(options.method, options.url);
-    
-    // Make the actual request
-    const response = await axios({
-      method: options.method,
-      url: fullUrl,
-      data: options.data,
-      headers: {
-        'Authorization': `Bearer ${this.apiToken}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      timeout: 10000
-    });
-    
-    // Update stats
-    this.stats.successfulRequests++;
-    
-    // Calculate response time and update average
-    const responseTime = Date.now() - startTime;
-    this.updateAverageResponseTime(responseTime);
-    
-    // Log the response
-    this.logger.api(options.method, options.url, response.status, 
-      options.method === 'GET' ? undefined : options.data);
-    
-    return response.data as T;
-  } catch (error) {
-    // Update stats
-    this.stats.failedRequests++;
-    this.stats.lastError = error instanceof Error ? error : new Error(String(error));
-    
-    // Handle rate limiting specially
-    if (axios.isAxiosError(error) && error.response?.status === 429) {
-      this.handleRateLimitExceeded();
+  while (true) {
+    try {
+      await this.applyRateLimit();
+      
+      const startTime = Date.now();
+      // Track request stats
+      this.stats.totalRequests++;
+      this.stats.lastRequest = new Date();
+      
+      const fullUrl = `${API_BASE_URL}${options.url}`;
+      this.logger.api(options.method, options.url);
+      
+      // Make the actual request
+      const response = await axios({
+        method: options.method,
+        url: fullUrl,
+        data: options.data,
+        headers: {
+          'Authorization': `Bearer ${this.apiToken}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        timeout: 15000 // Increased timeout
+      });
+      
+      // Update stats
+      this.stats.successfulRequests++;
+      
+      // Calculate response time and update average
+      const responseTime = Date.now() - startTime;
+      this.updateAverageResponseTime(responseTime);
+      
+      // Log the response
+      this.logger.api(options.method, options.url, response.status, 
+        options.method === 'GET' ? undefined : options.data);
+      
+      return response.data as T;
+    } catch (error) {
+      // Update stats
+      this.stats.failedRequests++;
+      this.stats.lastError = error instanceof Error ? error : new Error(String(error));
+      
+      // Add retry logic for rate limiting
+      if (axios.isAxiosError(error) && error.response?.status === 429) {
+        this.handleRateLimitExceeded();
+        
+        retryCount++;
+        if (retryCount <= maxRetries) {
+          const delay = Math.pow(2, retryCount) * 2000; // Exponential backoff
+          this.logger.warn(`Rate limit exceeded, retrying in ${delay}ms (attempt ${retryCount}/${maxRetries})`, LogContext.API);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue; // Retry the request
+        }
+      }
+      
+      throw error;
+    } finally {
+      // Track rate limiting
+      this.trackRequest();
     }
-    
-    throw error;
-  } finally {
-    // Track rate limiting
-    this.trackRequest();
   }
 }
-
 /**
  * Apply rate limiting before making a request
  */
@@ -451,29 +459,30 @@ private async applyRateLimit(): Promise<void> {
     SleepMeApi.requestTracking.lastReset = now;
   }
   
-  // Check if we've hit the rate limit
-  if (SleepMeApi.requestTracking.count >= MAX_REQUESTS_PER_MINUTE) {
-    // Calculate time until reset
-    const timeUntilReset = 60000 - (now - SleepMeApi.requestTracking.lastReset);
-    this.logger.debug(`Rate limit reached, waiting ${timeUntilReset}ms`, LogContext.API);
+  // More conservative approach - back off at 60% of limit
+  if (SleepMeApi.requestTracking.count >= Math.floor(MAX_REQUESTS_PER_MINUTE * 0.6)) {
+    // Calculate time until reset plus buffer
+    const timeUntilReset = 60000 - (now - SleepMeApi.requestTracking.lastReset) + 2000;
+    this.logger.debug(`Approaching rate limit, waiting ${timeUntilReset}ms`, LogContext.API);
     
-    // Wait until rate limit resets
-    await new Promise(resolve => setTimeout(resolve, timeUntilReset + 100));
+    // Wait until reset plus buffer
+    await new Promise(resolve => setTimeout(resolve, timeUntilReset));
     
     // Reset tracking
     SleepMeApi.requestTracking.count = 0;
     SleepMeApi.requestTracking.lastReset = Date.now();
+    return;
   }
   
-  // Enforce minimum delay between requests
+  // Enforce longer minimum delay between requests
   const timeSinceLastRequest = now - SleepMeApi.requestTracking.lastRequest;
-  if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
-    const delay = MIN_REQUEST_INTERVAL - timeSinceLastRequest;
+  const minDelay = 2000; // Increase to 2 seconds
+  if (timeSinceLastRequest < minDelay) {
+    const delay = minDelay - timeSinceLastRequest;
     this.logger.verbose(`Enforcing minimum request delay: ${delay}ms`, LogContext.API);
     await new Promise(resolve => setTimeout(resolve, delay));
   }
 }
-
 /**
  * Track a request for rate limiting
  */

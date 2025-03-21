@@ -60,10 +60,13 @@ import {
       
      // Extract configuration options
 this.temperatureUnit = (config.unit as string) || 'C';
-this.debugMode = config.advanced?.debugMode === true;
+
+// Safely access advanced options with fallbacks
+const advanced = config.advanced || {};
+this.debugMode = advanced.debugMode === true;
 this.pollingInterval = Math.max(30, Math.min(300, 
-  (config.advanced?.pollingInterval as number) || DEFAULT_POLLING_INTERVAL));
-      
+  (advanced.pollingInterval as number) || DEFAULT_POLLING_INTERVAL));
+  
       // Validate API token
       if (!config.apiToken) {
         this.log.error('API token missing from configuration! The plugin will not work.', LogContext.PLATFORM);

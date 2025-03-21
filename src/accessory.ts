@@ -108,8 +108,6 @@ this.service.getCharacteristic(this.Characteristic.TargetTemperature)
     
     // Set up polling interval
     this.setupStatusPolling();
-  // Set up improved behaviors for better HomeKit experience
-this.setupImprovedBehaviors();  
     this.platform.log.info(`Accessory initialized: ${this.displayName} (ID: ${this.deviceId})`, LogContext.ACCESSORY);
   }
   /**
@@ -152,109 +150,113 @@ this.setupImprovedBehaviors();
   }
   
   /**
-   * Refresh the device status from the API
-   */
-  private async refreshDeviceStatus(): Promise<void> {
-    // Prevent multiple concurrent updates
-    if (this.isUpdating) {
-      this.platform.log.debug('Status update already in progress, skipping', LogContext.ACCESSORY);
-      this.pendingUpdates = true;
-      return;
+ * Refresh the device status from the API
+ */
+private async refreshDeviceStatus(): Promise<void> {
+  // Prevent multiple concurrent updates
+  if (this.isUpdating) {
+    this.platform.log.debug('Status update already in progress, skipping', LogContext.ACCESSORY);
+    this.pendingUpdates = true;
+    return;
+  }
+  
+  // Add retry logic
+  let attempts = 0;
+  const maxAttempts = 3;
+  
+  this.isUpdating = true;
+  this.lastUpdateTime = Date.now();
+  this.pendingUpdates = false;
+  
+  try {
+    while (attempts < maxAttempts) {
+      try {
+        this.platform.log.debug(`Refreshing status for device ${this.deviceId} (attempt ${attempts + 1}/${maxAttempts})`, LogContext.ACCESSORY);
+        
+        // Get the device status from the API
+        const status = await this.apiClient.getDeviceStatus(this.deviceId);
+        
+        if (!status) {
+          throw new Error(`Failed to get status for device ${this.deviceId}`);
+        }
+        
+        // Update firmware version if available
+        if (status.firmwareVersion && status.firmwareVersion !== this.firmwareVersion) {
+          this.firmwareVersion = status.firmwareVersion;
+          this.accessory.getService(this.platform.Service.AccessoryInformation)?.
+            updateCharacteristic(this.Characteristic.FirmwareRevision, status.firmwareVersion);
+        }
+        
+        // Update temperature values
+        if (status.currentTemperature !== this.currentTemperature) {
+          this.currentTemperature = status.currentTemperature;
+          this.service.updateCharacteristic(
+            this.Characteristic.CurrentTemperature,
+            this.currentTemperature
+          );
+        }
+        
+        if (status.targetTemperature !== this.targetTemperature) {
+          this.targetTemperature = status.targetTemperature;
+          this.service.updateCharacteristic(
+            this.Characteristic.TargetTemperature,
+            this.targetTemperature
+          );
+        }
+        
+        // Update heating/cooling states based on thermal status and power state
+        const newHeatingState = this.mapThermalStatusToHeatingState(status.thermalStatus, status.powerState);
+        if (newHeatingState !== this.currentHeatingState) {
+          this.currentHeatingState = newHeatingState;
+          this.service.updateCharacteristic(
+            this.Characteristic.CurrentHeatingCoolingState,
+            this.currentHeatingState
+          );
+        }
+        
+        // Update target heating state based on power state
+        const newTargetState = this.determineTargetHeatingState(status.thermalStatus, status.powerState);
+        if (newTargetState !== this.targetHeatingState) {
+          this.targetHeatingState = newTargetState;
+          this.service.updateCharacteristic(
+            this.Characteristic.TargetHeatingCoolingState,
+            this.targetHeatingState
+          );
+        }
+        
+        // Success, exit retry loop
+        break;
+      } catch (error) {
+        attempts++;
+        
+        // Log the error but don't throw - we want polling to continue
+        this.platform.log.error(
+          `Failed to refresh device status (attempt ${attempts}/${maxAttempts}): ${error instanceof Error ? error.message : String(error)}`,
+          LogContext.ACCESSORY
+        );
+        
+        if (attempts < maxAttempts) {
+          // Wait before retrying - exponential backoff
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
+        }
+      }
     }
+  } finally {
+    this.isUpdating = false;
     
-    // Throttle frequent updates
-    const now = Date.now();
-    const minUpdateInterval = 2000; // 2 seconds
-    
-    if (now - this.lastUpdateTime < minUpdateInterval) {
-      this.platform.log.debug(
-        `Throttling status update (last update was ${now - this.lastUpdateTime}ms ago)`,
-        LogContext.ACCESSORY
-      );
-      
-      // Schedule an update after the throttle period
-      if (!this.pendingUpdates) {
-        this.pendingUpdates = true;
-        setTimeout(() => {
-          if (this.pendingUpdates) {
-            this.pendingUpdates = false;
-            this.refreshDeviceStatus().catch(error => 
-              this.platform.log.error(`Deferred status update failed: ${error}`, LogContext.ACCESSORY)
-            );
-          }
-        }, minUpdateInterval - (now - this.lastUpdateTime));
-      }
-      
-      return;
-    }
-    
-    this.isUpdating = true;
-    this.lastUpdateTime = now;
-    this.pendingUpdates = false;
-    
-    try {
-      this.platform.log.debug(`Refreshing status for device ${this.deviceId}`, LogContext.ACCESSORY);
-      
-      // Get the device status from the API
-      const status = await this.apiClient.getDeviceStatus(this.deviceId);
-      
-      if (!status) {
-        throw new Error(`Failed to get status for device ${this.deviceId}`);
-      }
-      
-      // Update firmware version if available
-      if (status.firmwareVersion && status.firmwareVersion !== this.firmwareVersion) {
-        this.firmwareVersion = status.firmwareVersion;
-        this.accessory.getService(this.platform.Service.AccessoryInformation)?.
-          updateCharacteristic(this.Characteristic.FirmwareRevision, status.firmwareVersion);
-      }
-      
-      // Update temperature values
-      if (status.currentTemperature !== this.currentTemperature) {
-        this.currentTemperature = status.currentTemperature;
-        this.service.updateCharacteristic(
-          this.Characteristic.CurrentTemperature,
-          this.currentTemperature
-        );
-      }
-      
-      if (status.targetTemperature !== this.targetTemperature) {
-        this.targetTemperature = status.targetTemperature;
-        this.service.updateCharacteristic(
-          this.Characteristic.TargetTemperature,
-          this.targetTemperature
-        );
-      }
-      
-      // Update heating/cooling states based on thermal status and power state
-      const newHeatingState = this.mapThermalStatusToHeatingState(status.thermalStatus, status.powerState);
-      if (newHeatingState !== this.currentHeatingState) {
-        this.currentHeatingState = newHeatingState;
-        this.service.updateCharacteristic(
-          this.Characteristic.CurrentHeatingCoolingState,
-          this.currentHeatingState
-        );
-      }
-      
-      // Update target heating state based on power state
-      const newTargetState = this.determineTargetHeatingState(status.thermalStatus, status.powerState);
-      if (newTargetState !== this.targetHeatingState) {
-        this.targetHeatingState = newTargetState;
-        this.service.updateCharacteristic(
-          this.Characteristic.TargetHeatingCoolingState,
-          this.targetHeatingState
-        );
-      }
-    } catch (error) {
-      // Log the error but don't throw - we want polling to continue
-      this.platform.log.error(
-        `Failed to refresh device status: ${error instanceof Error ? error.message : String(error)}`,
-        LogContext.ACCESSORY
-      );
-    } finally {
-      this.isUpdating = false;
+    // Process any pending updates
+    if (this.pendingUpdates) {
+      setTimeout(() => {
+        if (this.pendingUpdates) {
+          this.pendingUpdates = false;
+          this.refreshDeviceStatus().catch(error => 
+            this.platform.log.error(`Deferred status update failed: ${error}`, LogContext.ACCESSORY)
+          );
+        }
+      }, 2000);
     }
   }
+}
 /**
    * Map thermal status to HomeKit heating/cooling state
    */
@@ -341,7 +343,6 @@ private async handleTargetTemperatureGet(): Promise<CharacteristicValue> {
   this.platform.log.debug(`GET TargetTemperature: ${this.targetTemperature}`, LogContext.HOMEKIT);
   return this.targetTemperature;
 }
-
 /**
  * Handler for TargetTemperature SET
  * Modified to automatically turn on device and select appropriate mode
@@ -352,14 +353,13 @@ private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<vo
   
   try {
     // Always update the internal target temperature immediately
-    // This ensures HomeKit shows the correct value even if API call fails
     this.targetTemperature = newTemp;
     
-    // Determine if we need to turn on the device or just change temperature
+    // Determine if device is currently off
     const deviceIsOff = this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF;
     
     if (deviceIsOff) {
-      // Device is off, turn it on with the new temperature
+      // Device is off, automatically turn it on with the new temperature
       this.platform.log.info(
         `Device is OFF, automatically turning ON with temperature ${newTemp}°C`,
         LogContext.ACCESSORY
@@ -374,6 +374,16 @@ private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<vo
         this.service.updateCharacteristic(
           this.Characteristic.TargetHeatingCoolingState,
           this.targetHeatingState
+        );
+        
+        // Update current state based on temperature difference
+        this.currentHeatingState = (newTemp > this.currentTemperature) ?
+          this.Characteristic.CurrentHeatingCoolingState.HEAT :
+          this.Characteristic.CurrentHeatingCoolingState.COOL;
+        
+        this.service.updateCharacteristic(
+          this.Characteristic.CurrentHeatingCoolingState,
+          this.currentHeatingState
         );
       } else {
         throw new Error('Failed to turn device on');
@@ -400,11 +410,9 @@ private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<vo
       `Failed to set target temperature: ${error instanceof Error ? error.message : String(error)}`,
       LogContext.ACCESSORY
     );
-    
-    // No need to restore the previous target temperature in HomeKit
-    // as we've already updated our internal state to match the requested value
   }
 }
+
 /**
  * Handler for CurrentHeatingCoolingState GET
  */
@@ -560,28 +568,7 @@ private getHeatingStateName(state: number): string {
       return `UNKNOWN(${state})`;
   }
 }
-/**
- * Set up accessory with improved HomeKit behaviors
- * This makes temperature changes work even when device is off
- */
-private setupImprovedBehaviors(): void {
-  this.platform.log.debug('Setting up improved HomeKit behaviors', LogContext.ACCESSORY);
-  
-  // Listen for all changes to target temperature
-  this.service.getCharacteristic(this.Characteristic.TargetTemperature)
-    .on('set', (value, callback) => {
-      // First complete the HomeKit request
-      callback(null);
-      
-      // Then handle the temperature change and auto-activate as needed
-      this.handleTemperatureChangeWithAutoActivate(value).catch(error => {
-        this.platform.log.error(
-          `Error in auto-activate: ${error instanceof Error ? error.message : String(error)}`,
-          LogContext.ACCESSORY
-        );
-      });
-    });
-}
+
 /**
  * Handle temperature changes with automatic device activation
  * This allows changing temperature from any state, including OFF
