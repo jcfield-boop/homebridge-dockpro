@@ -293,9 +293,9 @@ public cleanup(): void {
 }
 
 /**
- * Refresh the device status from the API
- * @param isInitialSetup Whether this is the initial setup (to force AUTO mode)
- */
+   * Extract thermal status from API response
+   * Ensures correct display of current temperature regardless of device state
+   */
 private async refreshDeviceStatus(isInitialSetup = false): Promise<void> {
   // Prevent multiple concurrent updates
   if (this.isUpdating) {
@@ -340,7 +340,7 @@ private async refreshDeviceStatus(isInitialSetup = false): Promise<void> {
         // Update firmware version if available
         if (status.firmwareVersion && status.firmwareVersion !== this.firmwareVersion) {
           this.firmwareVersion = status.firmwareVersion;
-          // Explicitly update the firmware revision characteristic - fix for Issue #1
+          // Explicitly update the firmware revision characteristic
           this.informationService.updateCharacteristic(
             this.Characteristic.FirmwareRevision,
             this.firmwareVersion
@@ -350,7 +350,9 @@ private async refreshDeviceStatus(isInitialSetup = false): Promise<void> {
             LogContext.ACCESSORY
           );
         }
-        // Update temperature values
+        
+        // Always update current temperature regardless of device state
+        // This ensures temperature is displayed even when device is off
         if (status.currentTemperature !== this.currentTemperature) {
           this.currentTemperature = status.currentTemperature;
           this.service.updateCharacteristic(

@@ -47,10 +47,6 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   // Timer for periodic discovery
   private discoveryTimer?: NodeJS.Timeout;
   
-  // Startup phase tracking
-  private isStartupPhase = true;
-  private startupTimer?: NodeJS.Timeout;
-  
   constructor(
     logger: Logger,
     public readonly config: PlatformConfig,
@@ -65,7 +61,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     
     // Set polling interval with proper validation
     // Use a longer interval by default to reduce API calls
-    this.pollingInterval = Math.max(120, Math.min(600, 
+    this.pollingInterval = Math.max(60, Math.min(600, 
       parseInt(String(config.pollingInterval)) || DEFAULT_POLLING_INTERVAL));
     
     // Set debug mode
@@ -96,12 +92,6 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       LogContext.PLATFORM
     );
     
-    // Mark the end of startup phase after 2 minutes
-    this.startupTimer = setTimeout(() => {
-      this.isStartupPhase = false;
-      this.log.info('Exiting startup phase - regular operation begins', LogContext.PLATFORM);
-    }, 120000); // 2 minutes
-    
     // When this event is fired, homebridge has restored all cached accessories
     this.homebridgeApi.on('didFinishLaunching', () => {
       // Delay device discovery to prevent immediate API calls
@@ -113,14 +103,12 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
         setTimeout(() => {
           this.initializeSchedules();
         }, 30000);
-      }, 10000); // 10 second delay before starting discovery
+      }, 15000); // 15 second delay before starting discovery
       
       // Set up periodic discovery to catch new or changed devices
-      // Reduced frequency to once per day instead of every 12 hours
+      // Reduced frequency to once per day to prevent excessive API usage
       this.discoveryTimer = setInterval(() => {
-        if (!this.isStartupPhase) { // Skip during startup phase
-          this.discoverDevices();
-        }
+        this.discoverDevices();
       }, 24 * 60 * 60 * 1000); // Check once per day
     });
     
@@ -129,14 +117,17 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       if (this.discoveryTimer) {
         clearInterval(this.discoveryTimer);
       }
-      if (this.startupTimer) {
-        clearTimeout(this.startupTimer);
-      }
       
       // Clean up scheduler
       this.scheduler.cleanup();
+      
+      // Clean up accessories
+      this.accessoryInstances.forEach(accessory => {
+        accessory.cleanup();
+      });
     });
   }
+
   /**
    * Called when cached accessories are restored at startup
    */
@@ -209,7 +200,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
         
         // Stagger device initialization to prevent API rate limiting
         if (i > 0) {
-          const staggerDelay = 20000 + Math.floor(Math.random() * 10000); // 20-30 second delay
+          const staggerDelay = 30000 + Math.floor(Math.random() * 15000); // 30-45 second delay (increased)
           this.log.info(`Waiting ${Math.round(staggerDelay/1000)}s before initializing next device...`, LogContext.PLATFORM);
           await new Promise(resolve => setTimeout(resolve, staggerDelay));
         }
@@ -360,44 +351,51 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   }
   
   /**
-   * Get devices for dynamic selection in config UI
-   */
-  async getDynamicDeviceIds(): Promise<{ id: string; name: string }[]> {
-    this.log.info('Getting device list for config UI', LogContext.PLATFORM);
-    
-    try {
-      const devices = await this.api.getDevices();
-      return devices.map(device => ({
-        id: device.id,
-        name: device.name
-      }));
-    } catch (error) {
-      this.log.error(
-        `Error getting devices for config UI: ${error instanceof Error ? error.message : String(error)}`,
-        LogContext.PLATFORM
-      );
-      return [];
-    }
-  }
-  /**
    * Initialize schedules from configuration
-   * Modified to process schedules one by one with delays
    */
   private initializeSchedules(): void {
-    const schedulerSettings = this.config.schedulerSettings;
+    // Check for enabled scheduling
+    const enableScheduling = this.config.enableScheduling === true;
+    const schedules = this.config.schedules as Array<any> || [];
     
-    if (!schedulerSettings || !schedulerSettings.enabled) {
-      this.log.info('Scheduler not enabled in config, skipping initialization', LogContext.PLATFORM);
+    if (!enableScheduling || !schedules || schedules.length === 0) {
+      this.log.info('Scheduler not enabled in config or no schedules defined, skipping initialization', LogContext.PLATFORM);
       return;
     }
     
     this.log.info('Initializing schedules from config', LogContext.PLATFORM);
     
     try {
-      // Process schedules one by one with delays
-      if (Array.isArray(schedulerSettings.schedules)) {
-        this.processScheduleQueue(schedulerSettings.schedules);
+      // Get device IDs
+      const deviceIds: string[] = [];
+      
+      // Process device-specific schedules or apply to all devices
+      const configuredDevices = this.config.devices as Array<{id: string}> || [];
+      
+      // If no devices are configured, get them from the cached accessories
+      if (configuredDevices.length === 0) {
+        this.accessories.forEach(accessory => {
+          const deviceId = accessory.context.device?.id;
+          if (deviceId) {
+            deviceIds.push(deviceId);
+          }
+        });
+      } else {
+        // Use configured devices
+        configuredDevices.forEach(device => {
+          if (device.id) {
+            deviceIds.push(device.id);
+          }
+        });
       }
+      
+      // Create schedules for each device
+      deviceIds.forEach((deviceId, index) => {
+        // Stagger schedule initialization to prevent API rate limiting
+        setTimeout(() => {
+          this.createDeviceSchedule(deviceId, schedules);
+        }, index * 20000); // 20 second delay between devices
+      });
     } catch (error) {
       this.log.error(
         `Error initializing schedules: ${error instanceof Error ? error.message : String(error)}`,
@@ -407,23 +405,10 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   }
   
   /**
-   * Process schedules one by one with delays between them
+   * Create schedule for a specific device
    */
-  private processScheduleQueue(schedules: any[], index = 0): void {
-    if (index >= schedules.length) {
-      this.log.info(`All schedules processed (${schedules.length} total)`, LogContext.PLATFORM);
-      return;
-    }
-    
-    const deviceSchedule = schedules[index];
-    const deviceId = deviceSchedule.deviceId;
-    
-    if (!deviceId) {
-      this.log.warn('Schedule missing device ID, skipping', LogContext.PLATFORM);
-      // Continue with next schedule after delay
-      setTimeout(() => this.processScheduleQueue(schedules, index + 1), 5000);
-      return;
-    }
+  private createDeviceSchedule(deviceId: string, schedules: any[]): void {
+    this.log.info(`Creating schedule for device ${deviceId}`, LogContext.PLATFORM);
     
     // Create schedule structure
     const schedule: DeviceSchedule = {
@@ -433,46 +418,45 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     };
     
     // Process schedule items
-    if (Array.isArray(deviceSchedule.scheduleItems)) {
-      for (const item of deviceSchedule.scheduleItems) {
-        // Convert day type to day array
-        let days: number[] = [];
-        switch (item.dayType) {
-          case 'everyday':
-            days = [0, 1, 2, 3, 4, 5, 6]; // All days
-            break;
-          case 'weekday':
-            days = [1, 2, 3, 4, 5]; // Monday to Friday
-            break;
-          case 'weekend':
-            days = [0, 6]; // Sunday and Saturday
-            break;
-          case 'specific':
-            // Convert string to number for specific day
-            days = [parseInt(item.specificDay, 10)];
-            break;
-        }
-        
-        // Create event
-        const event: ScheduledEvent = {
-          id: `evt_${Math.random().toString(36).substring(2, 15)}`,
-          enabled: true, // Default to enabled
-          time: item.time,
-          temperature: item.temperature,
-          days,
-          warmHug: item.warmHug || false,
-          warmHugDuration: item.warmHugDuration || 20
-        };
-        
-        schedule.events.push(event);
+    for (const item of schedules) {
+      // Convert day type to day array
+      let days: number[] = [];
+      switch (item.dayType) {
+        case 'everyday':
+          days = [0, 1, 2, 3, 4, 5, 6]; // All days
+          break;
+        case 'weekday':
+          days = [1, 2, 3, 4, 5]; // Monday to Friday
+          break;
+        case 'weekend':
+          days = [0, 6]; // Sunday and Saturday
+          break;
+        case 'specific':
+          // Convert string to number for specific day
+          days = [parseInt(item.specificDay, 10)];
+          break;
+        default:
+          days = [0, 1, 2, 3, 4, 5, 6]; // Default to all days
       }
+      
+      // Create event
+      const event: ScheduledEvent = {
+        id: `evt_${Math.random().toString(36).substring(2, 15)}`,
+        enabled: true, // Default to enabled
+        time: item.time,
+        temperature: item.temperature,
+        days,
+        warmHug: item.warmHug || false,
+        warmHugDuration: parseInt(item.warmHugDuration || '20', 10)
+      };
+      
+      schedule.events.push(event);
     }
     
-    // Set the schedule
-    this.scheduler.setDeviceSchedule(schedule);
-    this.log.info(`Initialized schedule for device ${deviceId} with ${schedule.events.length} events`, LogContext.PLATFORM);
-    
-    // Process next schedule after a delay
-    setTimeout(() => this.processScheduleQueue(schedules, index + 1), 10000); // 10 second delay
+    // Set the schedule if it has events
+    if (schedule.events.length > 0) {
+      this.scheduler.setDeviceSchedule(schedule);
+      this.log.info(`Initialized schedule for device ${deviceId} with ${schedule.events.length} events`, LogContext.PLATFORM);
+    }
   }
 }

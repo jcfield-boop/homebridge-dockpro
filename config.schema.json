@@ -75,7 +75,7 @@
               "maximum": 46,
               "multipleOf": 0.5,
               "default": 21,
-              "description": "Target temperature in Celsius (13-46°C)",
+              "description": "Target temperature (13-46°C / 55-115°F)",
               "required": true
             },
             "dayType": {
@@ -119,10 +119,10 @@
       "pollingInterval": {
         "title": "Polling Interval",
         "type": "integer",
-        "default": 60,
-        "minimum": 30,
+        "default": 120,
+        "minimum": 60,
         "maximum": 300,
-        "description": "How frequently to check device status (in seconds)"
+        "description": "How frequently to check device status (in seconds). Higher values help avoid rate limiting."
       },
       "debugMode": {
         "title": "Debug Mode",

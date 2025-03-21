@@ -70,7 +70,7 @@ export class SleepMeApi {
       setTimeout(() => {
         this.logger.debug('Initial startup delay complete', LogContext.API);
         resolve();
-      }, 10000); // 10 second startup delay
+      }, 15000); // 15 second startup delay (increased from 10)
     });
     
     this.logger.info('SleepMe API client initialized', LogContext.API);
@@ -252,7 +252,6 @@ export class SleepMeApi {
     
     return value;
   }
-
   /**
    * Turn device on
    * Modified to match API expectations based on Postman example
@@ -437,9 +436,9 @@ export class SleepMeApi {
     
     return false;
   }
-  
   /**
    * Apply strict rate limiting with backoff periods for different priority levels
+   * Enhanced to provide more aggressive rate limiting prevention
    */
   private async applyStrictRateLimit(priority: string): Promise<void> {
     const now = Date.now();
@@ -458,20 +457,20 @@ export class SleepMeApi {
     
     // If we've hit a rate limit before, enforce much stricter limits
     let maxAllowedRequests = SleepMeApi.requestTracking.rateLimitHit 
-      ? Math.floor(MAX_REQUESTS_PER_MINUTE * 0.2)  // Only 20% of max if rate limit was hit
-      : Math.floor(MAX_REQUESTS_PER_MINUTE * 0.5); // 50% of max normally
+      ? Math.floor(MAX_REQUESTS_PER_MINUTE * 0.15)  // Only 15% of max if rate limit was hit (more restrictive)
+      : Math.floor(MAX_REQUESTS_PER_MINUTE * 0.4);  // 40% of max normally (more restrictive)
     
     // Override for high priority - allow more but still be cautious
     if (priority === 'high') {
       maxAllowedRequests = SleepMeApi.requestTracking.rateLimitHit 
-        ? Math.floor(MAX_REQUESTS_PER_MINUTE * 0.33) // 33% for high priority when rate limited 
-        : Math.floor(MAX_REQUESTS_PER_MINUTE * 0.75); // 75% for high priority normally
+        ? Math.floor(MAX_REQUESTS_PER_MINUTE * 0.25) // 25% for high priority when rate limited 
+        : Math.floor(MAX_REQUESTS_PER_MINUTE * 0.6); // 60% for high priority normally
     }
     
     // If we've reached our self-imposed limit
     if (SleepMeApi.requestTracking.count >= maxAllowedRequests) {
       // Time until the current minute resets + a buffer
-      const timeUntilReset = (60000 - (now - SleepMeApi.requestTracking.lastReset)) + 5000; // 5s buffer
+      const timeUntilReset = (60000 - (now - SleepMeApi.requestTracking.lastReset)) + 10000; // 10s buffer (increased)
       
       this.logger.warn(
         `Rate limit threshold reached (${SleepMeApi.requestTracking.count}/${MAX_REQUESTS_PER_MINUTE}), ` +
@@ -492,11 +491,11 @@ export class SleepMeApi {
     
     if (SleepMeApi.requestTracking.rateLimitHit) {
       // Much longer delays if we've hit rate limits
-      minDelay = priority === 'high' ? 10000 : 15000; // 10-15 seconds between requests
+      minDelay = priority === 'high' ? 15000 : 20000; // 15-20 seconds between requests (increased)
     } else {
       // Normal operation delays
-      minDelay = priority === 'high' ? 5000 : 
-                 priority === 'normal' ? 8000 : 12000; // 5-12 seconds between requests
+      minDelay = priority === 'high' ? 8000 : 
+                 priority === 'normal' ? 12000 : 15000; // 8-15 seconds between requests (increased)
     }
     
     // Enforce minimum delay between requests
@@ -578,8 +577,8 @@ export class SleepMeApi {
             
             // Calculate backoff time based on retry count (exponential backoff)
             // Much more aggressive backoff than before
-            const baseBackoff = 60000; // Start with 1 minute
-            const backoffTime = Math.min(600000, baseBackoff * Math.pow(2, retryCount)); 
+            const baseBackoff = 120000; // Start with 2 minutes (increased from 1)
+            const backoffTime = Math.min(900000, baseBackoff * Math.pow(2, retryCount)); // Max 15 minutes
             const backoffUntil = Date.now() + backoffTime;
             
             this.logger.warn(
@@ -592,7 +591,7 @@ export class SleepMeApi {
             retryCount++;
             if (retryCount <= maxRetries) {
               // Calculate retry delay - use exponential backoff with retries
-              const retryDelay = Math.pow(2, retryCount + 1) * 2000;
+              const retryDelay = Math.pow(2, retryCount + 1) * 5000; // Increased base delay
               
               this.logger.warn(
                 `Request failed, retrying in ${Math.round(retryDelay/1000)}s (attempt ${retryCount}/${maxRetries}): ${axiosError.message}`,
@@ -603,7 +602,6 @@ export class SleepMeApi {
               continue;
             }
           }
-          
           // Server errors (500 range) or network errors should be retried
           const shouldRetry = !axiosError.response || 
                              axiosError.response.status >= 500 || 
@@ -613,7 +611,7 @@ export class SleepMeApi {
             retryCount++;
             
             // Use exponential backoff
-            const retryDelay = Math.pow(2, retryCount) * 1000;
+            const retryDelay = Math.pow(2, retryCount) * 2000; // Increased base delay
             
             this.logger.warn(
               `Server error, retrying in ${Math.round(retryDelay/1000)}s (attempt ${retryCount}/${maxRetries}): ${axiosError.message}`,
@@ -664,100 +662,100 @@ export class SleepMeApi {
     }
   }
   
-  /**
+ /**
    * Update the average response time
    */
-  private updateAverageResponseTime(newResponseTime: number): void {
-    if (this.stats.averageResponseTime === 0) {
-      this.stats.averageResponseTime = newResponseTime;
+ private updateAverageResponseTime(newResponseTime: number): void {
+  if (this.stats.averageResponseTime === 0) {
+    this.stats.averageResponseTime = newResponseTime;
+  } else {
+    // Simple moving average calculation
+    this.stats.averageResponseTime = 
+      (this.stats.averageResponseTime * 0.9) + (newResponseTime * 0.1);
+  }
+}
+
+/**
+ * Extract a temperature value from nested properties
+ */
+private extractTemperature(data: Record<string, any>, paths: string[], defaultValue = 21): number {
+  for (const path of paths) {
+    const value = this.extractNestedValue(data, path);
+    if (typeof value === 'number' && !isNaN(value)) {
+      return value;
+    }
+  }
+  
+  return defaultValue;
+}
+
+/**
+ * Extract thermal status from API response
+ */
+private extractThermalStatus(data: Record<string, any>): ThermalStatus {
+  // Try to get thermal status from control object
+  const rawStatus = this.extractNestedValue(data, 'control.thermal_control_status') ||
+                    this.extractNestedValue(data, 'thermal_control_status');
+  
+  if (rawStatus) {
+    switch (String(rawStatus).toLowerCase()) {
+      case 'active':
+        return ThermalStatus.ACTIVE;
+      case 'heating':
+        return ThermalStatus.HEATING;
+      case 'cooling':
+        return ThermalStatus.COOLING;
+      case 'standby':
+        return ThermalStatus.STANDBY;
+      case 'off':
+        return ThermalStatus.OFF;
+      default:
+        this.logger.warn(`Unknown thermal status: ${rawStatus}`, LogContext.API);
+        return ThermalStatus.UNKNOWN;
+    }
+  }
+  
+  return ThermalStatus.UNKNOWN;
+}
+
+/**
+ * Extract power state from API response
+ */
+private extractPowerState(data: Record<string, any>): PowerState {
+  // Try different paths for power state
+  const thermalStatus = this.extractThermalStatus(data);
+  
+  // If we have a thermal status, infer power state
+  if (thermalStatus !== ThermalStatus.UNKNOWN) {
+    if (thermalStatus === ThermalStatus.OFF || thermalStatus === ThermalStatus.STANDBY) {
+      return PowerState.OFF;
     } else {
-      // Simple moving average calculation
-      this.stats.averageResponseTime = 
-        (this.stats.averageResponseTime * 0.9) + (newResponseTime * 0.1);
+      return PowerState.ON;
     }
   }
   
-  /**
-   * Extract a temperature value from nested properties
-   */
-  private extractTemperature(data: Record<string, any>, paths: string[], defaultValue = 21): number {
-    for (const path of paths) {
-      const value = this.extractNestedValue(data, path);
-      if (typeof value === 'number' && !isNaN(value)) {
-        return value;
-      }
-    }
-    
-    return defaultValue;
+  // Try to get from is_connected or other fields
+  const isConnected = this.extractNestedValue(data, 'status.is_connected') ||
+                      this.extractNestedValue(data, 'is_connected');
+  
+  if (typeof isConnected === 'boolean') {
+    return isConnected ? PowerState.ON : PowerState.OFF;
   }
   
-  /**
-   * Extract thermal status from API response
-   */
-  private extractThermalStatus(data: Record<string, any>): ThermalStatus {
-    // Try to get thermal status from control object
-    const rawStatus = this.extractNestedValue(data, 'control.thermal_control_status') ||
-                      this.extractNestedValue(data, 'thermal_control_status');
-    
-    if (rawStatus) {
-      switch (String(rawStatus).toLowerCase()) {
-        case 'active':
-          return ThermalStatus.ACTIVE;
-        case 'heating':
-          return ThermalStatus.HEATING;
-        case 'cooling':
-          return ThermalStatus.COOLING;
-        case 'standby':
-          return ThermalStatus.STANDBY;
-        case 'off':
-          return ThermalStatus.OFF;
-        default:
-          this.logger.warn(`Unknown thermal status: ${rawStatus}`, LogContext.API);
-          return ThermalStatus.UNKNOWN;
-      }
-    }
-    
-    return ThermalStatus.UNKNOWN;
-  }
-  
-  /**
-   * Extract power state from API response
-   */
-  private extractPowerState(data: Record<string, any>): PowerState {
-    // Try different paths for power state
-    const thermalStatus = this.extractThermalStatus(data);
-    
-    // If we have a thermal status, infer power state
-    if (thermalStatus !== ThermalStatus.UNKNOWN) {
-      if (thermalStatus === ThermalStatus.OFF || thermalStatus === ThermalStatus.STANDBY) {
-        return PowerState.OFF;
-      } else {
-        return PowerState.ON;
-      }
-    }
-    
-    // Try to get from is_connected or other fields
-    const isConnected = this.extractNestedValue(data, 'status.is_connected') ||
-                        this.extractNestedValue(data, 'is_connected');
-    
-    if (typeof isConnected === 'boolean') {
-      return isConnected ? PowerState.ON : PowerState.OFF;
-    }
-    
-    return PowerState.UNKNOWN;
-  }
-  
-  /**
-   * Convert Celsius to Fahrenheit
-   */
-  private convertCtoF(celsius: number): number {
-    return (celsius * 9/5) + 32;
-  }
-  
-  /**
-   * Convert Fahrenheit to Celsius
-   */
-  private convertFtoC(fahrenheit: number): number {
-    return (fahrenheit - 32) * 5/9;
-  }
+  return PowerState.UNKNOWN;
+}
+
+/**
+ * Convert Celsius to Fahrenheit
+ */
+private convertCtoF(celsius: number): number {
+  return (celsius * 9/5) + 32;
+}
+
+/**
+ * Convert Fahrenheit to Celsius
+ */
+private convertFtoC(fahrenheit: number): number {
+  return (fahrenheit - 32) * 5/9;
+}
 }
