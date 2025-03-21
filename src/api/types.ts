@@ -24,6 +24,8 @@ export interface DeviceStatus {
   // System data
   firmwareVersion?: string;
   connected?: boolean;
+  waterLevel?: number;
+  isWaterLow?: boolean;
   
   // Raw API response for debugging
   rawResponse?: Record<string, any>;

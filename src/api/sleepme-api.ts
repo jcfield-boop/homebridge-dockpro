@@ -211,6 +211,25 @@ export class SleepMeApi {
 }
 
 /**
+ * Extract a nested property value from an object
+ * Made public to allow accessory to extract values from raw response
+ */
+public extractNestedValue(obj: Record<string, any>, path: string): any {
+  const parts = path.split('.');
+  let value = obj;
+  
+  for (const part of parts) {
+    if (value === null || value === undefined || typeof value !== 'object') {
+      return undefined;
+    }
+    
+    value = value[part];
+  }
+  
+  return value;
+}
+
+/**
  * Turn device on
  * Modified to match API expectations based on Postman example
  */
@@ -351,8 +370,9 @@ private async makeRequest<T>(options: {
   
   return resultPromise;
 }
+
 /**
- * Execute a request with rate limiting
+ * Execute a request with rate limiting and exponential backoff
  */
 private async executeRequest<T>(options: {
   method: string;
@@ -360,7 +380,7 @@ private async executeRequest<T>(options: {
   data?: any;
 }): Promise<T> {
   let retryCount = 0;
-  const maxRetries = 3;
+  const maxRetries = 5; // Increased from 3
   
   while (true) {
     try {
@@ -384,7 +404,7 @@ private async executeRequest<T>(options: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
-        timeout: 15000 // Increased timeout
+        timeout: 20000 // Increased timeout from 15s to 20s
       });
       
       // Update stats
@@ -404,16 +424,32 @@ private async executeRequest<T>(options: {
       this.stats.failedRequests++;
       this.stats.lastError = error instanceof Error ? error : new Error(String(error));
       
-      // Add retry logic for rate limiting
-      if (axios.isAxiosError(error) && error.response?.status === 429) {
-        this.handleRateLimitExceeded();
+      // Improved error handling with more specific retry logic
+      if (axios.isAxiosError(error)) {
+        // Network errors or server errors (5xx) should be retried
+        const shouldRetry = !error.response || error.response.status >= 500 || error.response.status === 429;
         
-        retryCount++;
-        if (retryCount <= maxRetries) {
-          const delay = Math.pow(2, retryCount) * 2000; // Exponential backoff
-          this.logger.warn(`Rate limit exceeded, retrying in ${delay}ms (attempt ${retryCount}/${maxRetries})`, LogContext.API);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          continue; // Retry the request
+        if (shouldRetry) {
+          // Handle rate limiting specifically
+          if (error.response?.status === 429) {
+            this.handleRateLimitExceeded();
+          }
+          
+          retryCount++;
+          if (retryCount <= maxRetries) {
+            // Exponential backoff with jitter
+            const baseDelay = Math.pow(2, retryCount) * 2000;
+            const jitter = Math.random() * 1000;
+            const delay = baseDelay + jitter;
+            
+            this.logger.warn(
+              `Request failed, retrying in ${Math.round(delay / 1000)}s (attempt ${retryCount}/${maxRetries}): ${error.message}`,
+              LogContext.API
+            );
+            
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue; // Retry the request
+          }
         }
       }
       
@@ -424,6 +460,7 @@ private async executeRequest<T>(options: {
     }
   }
 }
+
 /**
  * Apply rate limiting before making a request
  */
@@ -436,10 +473,10 @@ private async applyRateLimit(): Promise<void> {
     SleepMeApi.requestTracking.lastReset = now;
   }
   
-  // More conservative approach - back off at 50% of limit (reduced from 60%)
-  if (SleepMeApi.requestTracking.count >= Math.floor(MAX_REQUESTS_PER_MINUTE * 0.5)) {
+  // More conservative approach - back off at 40% of limit (reduced from 50%)
+  if (SleepMeApi.requestTracking.count >= Math.floor(MAX_REQUESTS_PER_MINUTE * 0.4)) {
     // Calculate time until reset plus buffer
-    const timeUntilReset = 60000 - (now - SleepMeApi.requestTracking.lastReset) + 5000; // Increased buffer
+    const timeUntilReset = 60000 - (now - SleepMeApi.requestTracking.lastReset) + 7000; // Increased buffer
     this.logger.debug(`Approaching rate limit, waiting ${timeUntilReset}ms`, LogContext.API);
     
     // Wait until reset plus buffer
@@ -451,15 +488,16 @@ private async applyRateLimit(): Promise<void> {
     return;
   }
   
-  // Enforce longer minimum delay between requests - increased from 2s to 3s
+  // Enforce longer minimum delay between requests - increased from 3s to 4s
   const timeSinceLastRequest = now - SleepMeApi.requestTracking.lastRequest;
-  const minDelay = 3000; // Increase to 3 seconds
+  const minDelay = 4000; // Increase to 4 seconds
   if (timeSinceLastRequest < minDelay) {
     const delay = minDelay - timeSinceLastRequest;
     this.logger.verbose(`Enforcing minimum request delay: ${delay}ms`, LogContext.API);
     await new Promise(resolve => setTimeout(resolve, delay));
   }
 }
+
 /**
  * Track a request for rate limiting
  */
@@ -473,7 +511,11 @@ private trackRequest(): void {
  */
 private handleRateLimitExceeded(): void {
   this.logger.warn('API rate limit exceeded', LogContext.API);
-  // Force a longer delay for the next request
+  // Force a longer delay for the next request - increased from 5s to 10s
+  const backoffTime = 10000; 
+  this.logger.info(`Enforcing rate limit backoff of ${backoffTime / 1000}s`, LogContext.API);
+  
+  // Reset tracking with increased counts to ensure we back off
   SleepMeApi.requestTracking.count = MAX_REQUESTS_PER_MINUTE;
 }
 
@@ -535,24 +577,6 @@ private extractTemperature(data: Record<string, any>, paths: string[], defaultVa
   }
   
   return defaultValue;
-}
-
-/**
- * Extract a nested property value from an object
- */
-private extractNestedValue(obj: Record<string, any>, path: string): any {
-  const parts = path.split('.');
-  let value = obj;
-  
-  for (const part of parts) {
-    if (value === null || value === undefined || typeof value !== 'object') {
-      return undefined;
-    }
-    
-    value = value[part];
-  }
-  
-  return value;
 }
 
 /**
@@ -624,4 +648,4 @@ private convertCtoF(celsius: number): number {
 private convertFtoC(fahrenheit: number): number {
   return (fahrenheit - 32) * 5/9;
 }
-} 
+}

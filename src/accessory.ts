@@ -17,6 +17,8 @@ import { MIN_TEMPERATURE_C, MAX_TEMPERATURE_C, TEMPERATURE_STEP } from './settin
 export class SleepMeAccessory {
   // HomeKit services
   private service: Service;
+  private informationService: Service;
+  private waterLevelService?: Service;
   
   // Device state
   private currentTemperature = 21; // Default value
@@ -24,10 +26,13 @@ export class SleepMeAccessory {
   private currentHeatingState = 0; // OFF
   private targetHeatingState = 0;  // OFF
   private firmwareVersion = 'Unknown';
+  private waterLevel = 100; // Default full water level
+  private isWaterLow = false;
   
   // Device properties
   private readonly deviceId: string;
   private readonly displayName: string;
+  private deviceModel = 'SleepMe Device';
   
   // Update control
   private isUpdating = false;
@@ -57,9 +62,9 @@ export class SleepMeAccessory {
     }
     
     // Set accessory information
-    this.accessory.getService(this.platform.Service.AccessoryInformation)!
+    this.informationService = this.accessory.getService(this.platform.Service.AccessoryInformation)!
       .setCharacteristic(this.Characteristic.Manufacturer, 'Sleepme Inc.')
-      .setCharacteristic(this.Characteristic.Model, 'ChiliPad')
+      .setCharacteristic(this.Characteristic.Model, this.deviceModel)
       .setCharacteristic(this.Characteristic.SerialNumber, this.deviceId);
 
     // Get or create the thermostat service
@@ -121,6 +126,7 @@ export class SleepMeAccessory {
     
     this.platform.log.info(`Accessory initialized: ${this.displayName} (ID: ${this.deviceId})`, LogContext.ACCESSORY);
   }
+
   /**
    * Set up the status polling mechanism
    */
@@ -177,6 +183,98 @@ export class SleepMeAccessory {
     }, 30000);
   }
   
+ /**
+ * Log device connection status
+ */
+private logConnectionStatus(connected: boolean): void {
+  // Just log the status change
+  if (!connected) {
+    this.platform.log.warn(
+      `Device ${this.deviceId} appears to be offline or unreachable`,
+      LogContext.ACCESSORY
+    );
+  } else {
+    this.platform.log.debug(
+      `Device ${this.deviceId} is online and reachable`,
+      LogContext.ACCESSORY
+    );
+  }
+}
+
+  /**
+   * Update or create the water level service
+   */
+  private updateWaterLevelService(waterLevel: number, isWaterLow: boolean): void {
+    // Only create/update if we have valid water level data
+    if (waterLevel !== undefined) {
+      // Get or create water level service (using Battery service as proxy)
+      if (!this.waterLevelService) {
+        this.waterLevelService = this.accessory.getService(this.platform.Service.Battery) ||
+                                this.accessory.addService(this.platform.Service.Battery, 'Water Level');
+      }
+      
+      // Update water level (as battery percentage)
+      this.waterLevelService.updateCharacteristic(
+        this.Characteristic.BatteryLevel,
+        waterLevel
+      );
+      
+      // Update low water status (as low battery status)
+      this.waterLevelService.updateCharacteristic(
+        this.Characteristic.StatusLowBattery,
+        isWaterLow ? 1 : 0
+      );
+
+      // Set charging state to "Not Charging" since it's not applicable for water level
+      this.waterLevelService.updateCharacteristic(
+        this.Characteristic.ChargingState,
+        this.Characteristic.ChargingState.NOT_CHARGING
+      );
+      
+      // Log water level status if low
+      if (isWaterLow) {
+        this.platform.log.warn(
+          `Water level low on device ${this.deviceId}: ${waterLevel}%`,
+          LogContext.ACCESSORY
+        );
+      }
+    }
+  }
+  
+  /**
+   * Detect device model based on attachments or other characteristics
+   */
+  private detectDeviceModel(data: Record<string, any>): string {
+    const attachments = this.apiClient.extractNestedValue(data, 'attachments');
+    
+    if (Array.isArray(attachments)) {
+      if (attachments.includes('CHILIPAD_PRO')) {
+        return 'ChiliPad Pro';
+      } else if (attachments.includes('OOLER')) {
+        return 'OOLER Sleep System';
+      } else if (attachments.includes('DOCK_PRO')) {
+        return 'Dock Pro';
+      }
+    }
+    
+    // Check model field directly
+    const model = this.apiClient.extractNestedValue(data, 'about.model') || 
+                  this.apiClient.extractNestedValue(data, 'model');
+    
+    if (model) {
+      if (model.includes('DP')) {
+        return 'Dock Pro';
+      } else if (model.includes('OL')) {
+        return 'OOLER Sleep System';
+      } else if (model.includes('CP')) {
+        return 'ChiliPad';
+      }
+    }
+    
+    // Default if we can't determine
+    return 'SleepMe Device';
+  }
+  
   /**
    * Clean up resources when this accessory is removed
    */
@@ -216,7 +314,8 @@ export class SleepMeAccessory {
     try {
       while (attempts < maxAttempts) {
         try {
-          this.platform.log.debug(`Refreshing status for device ${this.deviceId} (attempt ${attempts + 1}/${maxAttempts})`, LogContext.ACCESSORY);
+          attempts++;
+          this.platform.log.debug(`Refreshing status for device ${this.deviceId} (attempt ${attempts}/${maxAttempts})`, LogContext.ACCESSORY);
           
           // Get the device status from the API
           const status = await this.apiClient.getDeviceStatus(this.deviceId);
@@ -225,11 +324,31 @@ export class SleepMeAccessory {
             throw new Error(`Failed to get status for device ${this.deviceId}`);
           }
           
+          // Update model if we can detect it from raw response
+          if (status.rawResponse) {
+            const detectedModel = this.detectDeviceModel(status.rawResponse);
+            if (detectedModel !== this.deviceModel) {
+              this.deviceModel = detectedModel;
+              this.informationService.updateCharacteristic(
+                this.Characteristic.Model,
+                this.deviceModel
+              );
+              this.platform.log.info(`Detected device model: ${this.deviceModel}`, LogContext.ACCESSORY);
+            }
+          }
+          
           // Update firmware version if available
           if (status.firmwareVersion && status.firmwareVersion !== this.firmwareVersion) {
             this.firmwareVersion = status.firmwareVersion;
-            this.accessory.getService(this.platform.Service.AccessoryInformation)?.
-              updateCharacteristic(this.Characteristic.FirmwareRevision, status.firmwareVersion);
+            // Explicitly update the firmware revision characteristic - fix for Issue #1
+            this.informationService.updateCharacteristic(
+              this.Characteristic.FirmwareRevision,
+              this.firmwareVersion
+            );
+            this.platform.log.debug(
+              `Updated firmware version to ${this.firmwareVersion}`,
+              LogContext.ACCESSORY
+            );
           }
           
           // Update temperature values
@@ -248,6 +367,7 @@ export class SleepMeAccessory {
               this.targetTemperature
             );
           }
+          
           // Update heating/cooling states based on thermal status and power state
           const newHeatingState = this.mapThermalStatusToHeatingState(status.thermalStatus, status.powerState);
           if (newHeatingState !== this.currentHeatingState) {
@@ -268,11 +388,30 @@ export class SleepMeAccessory {
             );
           }
           
+         // Log connection status if available
+if (status.connected !== undefined) {
+  this.logConnectionStatus(status.connected);
+}
+          
+          // Update water level service if water level data is available
+          if (status.rawResponse) {
+            // Extract water level data from raw response
+            const waterLevel = this.apiClient.extractNestedValue(status.rawResponse, 'status.water_level') || 
+                              this.apiClient.extractNestedValue(status.rawResponse, 'water_level');
+            
+            const isWaterLow = this.apiClient.extractNestedValue(status.rawResponse, 'status.is_water_low') || 
+                              this.apiClient.extractNestedValue(status.rawResponse, 'is_water_low') || false;
+            
+            if (waterLevel !== undefined && waterLevel !== this.waterLevel) {
+              this.waterLevel = waterLevel;
+              this.isWaterLow = isWaterLow;
+              this.updateWaterLevelService(this.waterLevel, this.isWaterLow);
+            }
+          }
+          
           // Success, exit retry loop
           break;
         } catch (error) {
-          attempts++;
-          
           // Log the error but don't throw - we want polling to continue
           this.platform.log.error(
             `Failed to refresh device status (attempt ${attempts}/${maxAttempts}): ${error instanceof Error ? error.message : String(error)}`,
@@ -387,45 +526,60 @@ export class SleepMeAccessory {
     
     try {
       // Always update the internal target temperature immediately for responsiveness
+      // This ensures the UI shows the change right away
       this.targetTemperature = newTemp;
       
       // If device is currently off, automatically turn it on
       if (this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF) {
-        this.platform.log.info(`Auto-enabling device due to temperature change`, LogContext.ACCESSORY);
+        this.platform.log.info(`Auto-enabling device due to temperature change to ${newTemp}°C`, LogContext.ACCESSORY);
         
         // Set to AUTO mode
         this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.AUTO;
         
-        // Update HomeKit characteristic
+        // Update HomeKit characteristics immediately for better UX
         this.service.updateCharacteristic(
           this.Characteristic.TargetHeatingCoolingState,
           this.targetHeatingState
         );
         
-        // Turn on the device in AUTO mode
+        // Anticipate heating/cooling state based on target vs current temp
+        if (newTemp > this.currentTemperature + 0.5) {
+          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+        } else if (newTemp < this.currentTemperature - 0.5) {
+          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+        } else {
+          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+        }
+        
+        // Update current state in HomeKit for immediate feedback
+        this.service.updateCharacteristic(
+          this.Characteristic.CurrentHeatingCoolingState,
+          this.currentHeatingState
+        );
+        
+        // Turn on the device in AUTO mode with the new temperature
         await this.apiClient.turnDeviceOn(this.deviceId, newTemp);
       } else {
         // Device is already on, just update the temperature
         await this.apiClient.setTemperature(this.deviceId, newTemp);
+        
+        // Update current state based on temperature difference
+        if (newTemp > this.currentTemperature + 0.5) {
+          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+          this.service.updateCharacteristic(
+            this.Characteristic.CurrentHeatingCoolingState,
+            this.currentHeatingState
+          );
+        } else if (newTemp < this.currentTemperature - 0.5) {
+          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+          this.service.updateCharacteristic(
+            this.Characteristic.CurrentHeatingCoolingState,
+            this.currentHeatingState
+          );
+        }
       }
       
-      // Update current state based on temperature difference
-      if (newTemp > this.currentTemperature + 0.5) {
-        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-      } else if (newTemp < this.currentTemperature - 0.5) {
-        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
-      } else {
-        // When temperatures are close, default to HEAT
-        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-      }
-      
-      // Update HomeKit characteristics
-      this.service.updateCharacteristic(
-        this.Characteristic.CurrentHeatingCoolingState,
-        this.currentHeatingState
-      );
-      
-      // Refresh the device status after a short delay
+      // Refresh the device status after a short delay to confirm changes
       setTimeout(() => {
         this.refreshDeviceStatus().catch(error => {
           this.platform.log.error(
@@ -438,6 +592,13 @@ export class SleepMeAccessory {
       this.platform.log.error(
         `Failed to set target temperature: ${error instanceof Error ? error.message : String(error)}`,
         LogContext.ACCESSORY
+      );
+      
+      // In case of error, make sure UI still shows the correct temp
+      // Don't revert to old temp as the user clearly wanted to change it
+      this.service.updateCharacteristic(
+        this.Characteristic.TargetTemperature,
+        this.targetTemperature
       );
     }
   }
@@ -607,8 +768,8 @@ export class SleepMeAccessory {
       return; // Not for this device
     }
     
-    this.platform.log.debug(
-      `Handling scheduled event: temp=${eventData.temperature}°C, state=${eventData.state}`,
+    this.platform.log.info(
+      `Executing scheduled event: temp=${eventData.temperature}°C, state=${eventData.state}`,
       LogContext.ACCESSORY
     );
     
@@ -620,8 +781,6 @@ export class SleepMeAccessory {
       
       // Update current heating state based on temperature difference
       if (this.targetTemperature > this.currentTemperature + 0.5) {
-        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-      } else if (this.targetTemperature < this.currentTemperature - 0.5) {
         this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
       } else {
         this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
