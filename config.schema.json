@@ -32,20 +32,6 @@
         "expandable": true,
         "expanded": false,
         "properties": {
-          "debugMode": {
-            "title": "Debug Mode",
-            "type": "boolean",
-            "default": false,
-            "description": "Enable verbose logging for troubleshooting"
-          },
-          "pollingInterval": {
-            "title": "Polling Interval",
-            "type": "integer",
-            "default": 60,
-            "minimum": 30,
-            "maximum": 300,
-            "description": "How frequently to check device status (in seconds)"
-          },
           "scheduler": {
             "title": "Temperature Scheduler",
             "type": "object",
@@ -76,12 +62,6 @@
                       "items": {
                         "type": "object",
                         "properties": {
-                          "enabled": {
-                            "title": "Enabled",
-                            "type": "boolean",
-                            "default": true,
-                            "description": "Enable/disable this schedule item"
-                          },
                           "dayType": {
                             "title": "Day Type",
                             "type": "string",
@@ -146,6 +126,20 @@
                 }
               }
             }
+          },
+          "debugMode": {
+            "title": "Debug Mode",
+            "type": "boolean",
+            "default": false,
+            "description": "Enable verbose logging for troubleshooting"
+          },
+          "pollingInterval": {
+            "title": "Polling Interval",
+            "type": "integer",
+            "default": 60,
+            "minimum": 30,
+            "maximum": 300,
+            "description": "How frequently to check device status (in seconds)"
           }
         }
       }
@@ -162,8 +156,6 @@
       "expandable": true,
       "expanded": false,
       "items": [
-        "advanced.debugMode",
-        "advanced.pollingInterval",
         {
           "key": "advanced.scheduler",
           "type": "section",
@@ -185,7 +177,6 @@
                   "type": "array",
                   "buttonText": "Add Schedule Item",
                   "items": [
-                    "advanced.scheduler.schedules[].scheduleItems[].enabled",
                     "advanced.scheduler.schedules[].scheduleItems[].dayType",
                     "advanced.scheduler.schedules[].scheduleItems[].specificDay",
                     "advanced.scheduler.schedules[].scheduleItems[].time",
@@ -197,7 +188,9 @@
               ]
             }
           ]
-        }
+        },
+        "advanced.debugMode",
+        "advanced.pollingInterval"
       ]
     }
   ],

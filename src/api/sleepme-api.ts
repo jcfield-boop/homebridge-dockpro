@@ -57,29 +57,6 @@ export class SleepMeApi {
     this.logger.info('SleepMe API client initialized', LogContext.API);
   }
   
-  /**
-   * Test the API connection
-   * Returns true if successful, false otherwise
-   */
-  public async testConnection(): Promise<boolean> {
-    try {
-      this.logger.info('Testing API connection...', LogContext.API);
-      
-      // Try to get devices as a connection test
-      const devices = await this.getDevices();
-      
-      if (devices && devices.length > 0) {
-        this.logger.info(`Connection successful - found ${devices.length} devices`, LogContext.API);
-        return true;
-      } else {
-        this.logger.error('Connection test failed - no devices found', LogContext.API);
-        return false;
-      }
-    } catch (error) {
-      this.handleApiError('testConnection', error);
-      return false;
-    }
-  }
   
   /**
    * Get API statistics
@@ -459,10 +436,10 @@ private async applyRateLimit(): Promise<void> {
     SleepMeApi.requestTracking.lastReset = now;
   }
   
-  // More conservative approach - back off at 60% of limit
-  if (SleepMeApi.requestTracking.count >= Math.floor(MAX_REQUESTS_PER_MINUTE * 0.6)) {
+  // More conservative approach - back off at 50% of limit (reduced from 60%)
+  if (SleepMeApi.requestTracking.count >= Math.floor(MAX_REQUESTS_PER_MINUTE * 0.5)) {
     // Calculate time until reset plus buffer
-    const timeUntilReset = 60000 - (now - SleepMeApi.requestTracking.lastReset) + 2000;
+    const timeUntilReset = 60000 - (now - SleepMeApi.requestTracking.lastReset) + 5000; // Increased buffer
     this.logger.debug(`Approaching rate limit, waiting ${timeUntilReset}ms`, LogContext.API);
     
     // Wait until reset plus buffer
@@ -474,9 +451,9 @@ private async applyRateLimit(): Promise<void> {
     return;
   }
   
-  // Enforce longer minimum delay between requests
+  // Enforce longer minimum delay between requests - increased from 2s to 3s
   const timeSinceLastRequest = now - SleepMeApi.requestTracking.lastRequest;
-  const minDelay = 2000; // Increase to 2 seconds
+  const minDelay = 3000; // Increase to 3 seconds
   if (timeSinceLastRequest < minDelay) {
     const delay = minDelay - timeSinceLastRequest;
     this.logger.verbose(`Enforcing minimum request delay: ${delay}ms`, LogContext.API);
