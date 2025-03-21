@@ -26,115 +26,103 @@
         "enumNames": ["Celsius (°C)", "Fahrenheit (°F)"],
         "description": "Select preferred temperature unit"
       },
-      "temperatureScheduler": {
-        "title": "Temperature Scheduler",
-        "type": "object",
-        "properties": {
-          "enabled": {
-            "title": "Enable Scheduling",
-            "type": "boolean",
-            "default": false
-          },
-          "schedules": {
-            "title": "Temperature Schedules",
-            "type": "array",
-            "condition": {
-              "functionBody": "return model.enabled === true"
+      "enableScheduling": {
+        "title": "Enable Scheduling",
+        "type": "boolean",
+        "default": false
+      },
+      "schedules": {
+        "title": "Temperature Schedules",
+        "type": "array",
+        "condition": {
+          "functionBody": "return model.enableScheduling === true"
+        },
+        "items": {
+          "type": "object",
+          "properties": {
+            "deviceId": {
+              "title": "Device",
+              "type": "string",
+              "description": "Select the device for this schedule",
+              "required": true,
+              "format": "dynamic-device-id"
             },
-            "items": {
-              "type": "object",
-              "properties": {
-                "deviceId": {
-                  "title": "Device",
-                  "type": "string",
-                  "description": "Select the device for this schedule",
-                  "required": true,
-                  "format": "dynamic-device-id"
-                },
-                "time": {
-                  "title": "Time",
-                  "type": "string",
-                  "format": "time",
-                  "description": "Time in 24-hour format (HH:MM)",
-                  "placeholder": "13:30",
-                  "pattern": "^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$",
-                  "required": true
-                },
-                "temperature": {
-                  "title": "Temperature",
-                  "type": "number",
-                  "minimum": 13,
-                  "maximum": 46,
-                  "multipleOf": 0.5,
-                  "default": 21,
-                  "description": "Target temperature in Celsius (13-46°C)",
-                  "required": true
-                },
-                "dayType": {
-                  "title": "Days",
-                  "type": "string",
-                  "enum": ["everyday", "weekday", "weekend", "specific"],
-                  "enumNames": ["Every Day", "Weekdays Only", "Weekends Only", "Specific Day"],
-                  "default": "everyday"
-                },
-                "specificDay": {
-                  "title": "Specific Day",
-                  "type": "string",
-                  "enum": ["0", "1", "2", "3", "4", "5", "6"],
-                  "enumNames": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
-                  "default": "1",
-                  "condition": {
-                    "functionBody": "return model.dayType === 'specific'"
-                  }
-                },
-                "warmHug": {
-                  "title": "Warm Hug",
-                  "type": "boolean",
-                  "default": false,
-                  "description": "Gradually increase temperature before this time"
-                },
-                "warmHugDuration": {
-                  "title": "Warm Hug Duration",
-                  "type": "integer",
-                  "minimum": 5,
-                  "maximum": 60,
-                  "default": 20,
-                  "description": "Duration of warm-up in minutes before target time",
-                  "condition": {
-                    "functionBody": "return model.warmHug === true"
-                  }
-                }
-              },
-              "required": ["deviceId", "time", "temperature"]
+            "time": {
+              "title": "Time",
+              "type": "string",
+              "format": "time",
+              "description": "Time in 24-hour format (HH:MM)",
+              "placeholder": "13:30",
+              "pattern": "^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$",
+              "required": true
+            },
+            "temperature": {
+              "title": "Temperature",
+              "type": "number",
+              "minimum": 13,
+              "maximum": 46,
+              "multipleOf": 0.5,
+              "default": 21,
+              "description": "Target temperature in Celsius (13-46°C)",
+              "required": true
+            },
+            "dayType": {
+              "title": "Days",
+              "type": "string",
+              "enum": ["everyday", "weekday", "weekend", "specific"],
+              "enumNames": ["Every Day", "Weekdays Only", "Weekends Only", "Specific Day"],
+              "default": "everyday"
+            },
+            "specificDay": {
+              "title": "Specific Day",
+              "type": "string",
+              "enum": ["0", "1", "2", "3", "4", "5", "6"],
+              "enumNames": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+              "default": "1",
+              "condition": {
+                "functionBody": "return model.dayType === 'specific'"
+              }
+            },
+            "warmHug": {
+              "title": "Warm Hug",
+              "type": "boolean",
+              "default": false,
+              "description": "Gradually increase temperature before this time"
+            },
+            "warmHugDuration": {
+              "title": "Warm Hug Duration",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 60,
+              "default": 20,
+              "description": "Duration of warm-up in minutes before target time",
+              "condition": {
+                "functionBody": "return model.warmHug === true"
+              }
             }
-          }
+          },
+          "required": ["deviceId", "time", "temperature"]
         }
       },
-      "advanced": {
-        "title": "Advanced Settings",
-        "type": "object",
-        "properties": {
-          "pollingInterval": {
-            "title": "Polling Interval",
-            "type": "integer",
-            "default": 60,
-            "minimum": 30,
-            "maximum": 300,
-            "description": "How frequently to check device status (in seconds)"
-          },
-          "debugMode": {
-            "title": "Debug Mode",
-            "type": "boolean",
-            "default": false,
-            "description": "Enable verbose logging for troubleshooting"
-          },
-          "verboseLogging": {
-            "title": "Verbose Logging",
-            "type": "boolean",
-            "default": false,
-            "description": "Log additional details for advanced troubleshooting"
-          }
-        }
+      "pollingInterval": {
+        "title": "Polling Interval",
+        "type": "integer",
+        "default": 60,
+        "minimum": 30,
+        "maximum": 300,
+        "description": "How frequently to check device status (in seconds)"
+      },
+      "debugMode": {
+        "title": "Debug Mode",
+        "type": "boolean",
+        "default": false,
+        "description": "Enable verbose logging for troubleshooting"
+      },
+      "verboseLogging": {
+        "title": "Verbose Logging",
+        "type": "boolean",
+        "default": false,
+        "description": "Log additional details for advanced troubleshooting"
       }
     },
     "required": ["apiToken"]
@@ -144,27 +132,24 @@
     "apiToken",
     "unit",
     {
-      "key": "temperatureScheduler",
-      "type": "section",
-      "title": "Temperature Scheduler",
-      "expandable": true,
-      "expanded": false,
+      "key": "enableScheduling",
+      "type": "checkbox"
+    },
+    {
+      "key": "schedules",
+      "type": "array",
+      "buttonText": "Add Schedule",
+      "condition": {
+        "functionBody": "return model.enableScheduling === true"
+      },
       "items": [
-        "temperatureScheduler.enabled",
-        {
-          "key": "temperatureScheduler.schedules",
-          "type": "array",
-          "buttonText": "Add Schedule",
-          "items": [
-            "temperatureScheduler.schedules[].deviceId",
-            "temperatureScheduler.schedules[].time",
-            "temperatureScheduler.schedules[].temperature",
-            "temperatureScheduler.schedules[].dayType",
-            "temperatureScheduler.schedules[].specificDay",
-            "temperatureScheduler.schedules[].warmHug",
-            "temperatureScheduler.schedules[].warmHugDuration"
-          ]
-        }
+        "schedules[].deviceId",
+        "schedules[].time",
+        "schedules[].temperature",
+        "schedules[].dayType",
+        "schedules[].specificDay",
+        "schedules[].warmHug",
+        "schedules[].warmHugDuration"
       ]
     },
     {
@@ -175,11 +160,11 @@
       "expanded": false,
       "items": [
         {
-          "key": "advanced.pollingInterval",
-          "placeholder": "60"
+          "key": "pollingInterval",
+          "type": "number"
         },
-        "advanced.debugMode",
-        "advanced.verboseLogging"
+        "debugMode",
+        "verboseLogging"
       ]
     }
   ],
