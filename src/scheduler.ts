@@ -1,11 +1,10 @@
-// src/scheduler.ts - Part 1 (Lines 1-250)
-
 /**
  * SleepMe Scheduler Module
  * Provides scheduling capabilities for SleepMe devices
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { EventEmitter } from 'events';
 import { SleepMeApi } from './api/sleepme-api.js';
 import { EnhancedLogger, LogContext } from './utils/logger.js';
 
@@ -53,8 +52,9 @@ export interface SchedulerStatus {
 /**
  * SleepMe Scheduler Class
  * Manages temperature schedules for SleepMe devices
+ * Extends EventEmitter to notify listeners of schedule events
  */
-export class SleepMeScheduler {
+export class SleepMeScheduler extends EventEmitter {
   // Store active timers by device ID
   private eventTimers: Map<string, NodeJS.Timeout> = new Map();
   
@@ -88,6 +88,8 @@ constructor(
     private readonly logger: EnhancedLogger,
     private readonly storagePath: string
   ) {
+    super(); // Initialize EventEmitter
+    
     this.logger.info('Initializing SleepMe scheduler', LogContext.SCHEDULER);
     this.loadSchedules();
   }
@@ -274,7 +276,6 @@ private loadSchedules(): void {
       return false;
     }
   }
-  // src/scheduler.ts - Part 2 (Lines 251-500)
   
   /**
    * Enable or disable a device's schedule
@@ -546,7 +547,6 @@ private loadSchedules(): void {
       this.scheduleWarmHug(deviceId, nextEvent, nextEventTime);
     }
   }
-  // src/scheduler.ts - Part 3 (Lines 501-750)
   
   /**
    * Schedule a warm hug process for a device
@@ -604,6 +604,13 @@ private loadSchedules(): void {
       // If device is off, turn it on first
       if (deviceStatus.powerState !== 'on') {
         await this.api.turnDeviceOn(deviceId, deviceStatus.currentTemperature);
+        
+        // Emit event that device has been turned on via scheduler
+        this.emit('scheduledEventExecuted', {
+          deviceId,
+          temperature: deviceStatus.currentTemperature,
+          state: 'auto'
+        });
       }
       
       const startTemp = deviceStatus.currentTemperature;
@@ -679,6 +686,13 @@ private loadSchedules(): void {
       // Set the temperature
       await this.api.setTemperature(deviceId, roundedTemp);
       
+      // Emit temperature change event
+      this.emit('scheduledEventExecuted', {
+        deviceId,
+        temperature: roundedTemp,
+        state: 'auto'
+      });
+      
       // Update warm hug state
       this.activeWarmHugs.set(deviceId, warmHug);
       
@@ -720,6 +734,7 @@ private loadSchedules(): void {
   
   /**
    * Execute a scheduled event
+   * Modified to emit an event when schedule execution occurs
    */
   private async executeEvent(deviceId: string, event: ScheduledEvent): Promise<void> {
     try {
@@ -733,13 +748,16 @@ private loadSchedules(): void {
       const deviceStatus = await this.api.getDeviceStatus(deviceId);
       
       if (deviceStatus) {
-        if (deviceStatus.powerState !== 'on') {
-          // Turn on the device with the target temperature
-          await this.api.turnDeviceOn(deviceId, event.temperature);
-        } else {
-          // Device is already on, just set temperature
-          await this.api.setTemperature(deviceId, event.temperature);
-        }
+        // Turn on the device with the target temperature, regardless of current state
+        // This ensures the device is set to AUTO mode in HomeKit
+        await this.api.turnDeviceOn(deviceId, event.temperature);
+        
+        // Emit event to update accessory state in HomeKit
+        this.emit('scheduledEventExecuted', {
+          deviceId,
+          temperature: event.temperature,
+          state: 'auto' // This indicates we want AUTO mode in HomeKit
+        });
       } else {
         this.logger.error(`Failed to get device status for event execution on device ${deviceId}`, LogContext.SCHEDULER);
       }
@@ -783,5 +801,8 @@ private loadSchedules(): void {
     this.warmHugTimers.clear();
     this.activeWarmHugs.clear();
     this.nextEvents.clear();
+    
+    // Remove all event listeners
+    this.removeAllListeners();
   }
 }

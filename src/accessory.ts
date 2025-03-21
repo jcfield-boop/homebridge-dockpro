@@ -86,8 +86,14 @@ export class SleepMeAccessory {
     this.service.getCharacteristic(this.Characteristic.CurrentHeatingCoolingState)
       .onGet(this.handleCurrentHeatingStateGet.bind(this));
     
-    // Target Heating/Cooling State
+    // Target Heating/Cooling State - LIMIT TO JUST OFF (0) and AUTO (3)
     this.service.getCharacteristic(this.Characteristic.TargetHeatingCoolingState)
+      .setProps({
+        validValues: [
+          this.Characteristic.TargetHeatingCoolingState.OFF,
+          this.Characteristic.TargetHeatingCoolingState.AUTO
+        ]
+      })
       .onGet(this.handleTargetHeatingStateGet.bind(this))
       .onSet(this.handleTargetHeatingStateSet.bind(this));
     
@@ -338,6 +344,7 @@ export class SleepMeAccessory {
   }
   /**
    * Determine the target heating state from the device status
+   * Simplified to only return OFF or AUTO
    */
   private determineTargetHeatingState(
     thermalStatus: ThermalStatus,
@@ -350,20 +357,8 @@ export class SleepMeAccessory {
       return this.Characteristic.TargetHeatingCoolingState.OFF;
     }
     
-    // For active states, determine the appropriate target state
-    switch (thermalStatus) {
-      case ThermalStatus.HEATING: {
-        return this.Characteristic.TargetHeatingCoolingState.HEAT;
-      }
-      case ThermalStatus.COOLING: {
-        return this.Characteristic.TargetHeatingCoolingState.COOL;
-      }
-      case ThermalStatus.ACTIVE:
-      default: {
-        // Default to AUTO mode when active
-        return this.Characteristic.TargetHeatingCoolingState.AUTO;
-      }
-    }
+    // For any active state, return AUTO mode
+    return this.Characteristic.TargetHeatingCoolingState.AUTO;
   }
 
   /**
@@ -384,7 +379,7 @@ export class SleepMeAccessory {
   
   /**
    * Handler for TargetTemperature SET
-   * Enhanced to automatically activate the device if needed
+   * Enhanced to automatically enable the device when temp changes
    */
   private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<void> {
     const newTemp = this.validateTemperature(value as number);
@@ -394,65 +389,41 @@ export class SleepMeAccessory {
       // Always update the internal target temperature immediately for responsiveness
       this.targetTemperature = newTemp;
       
-      // Determine if device is currently off
-      const deviceIsOff = this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF;
-      
-      if (deviceIsOff) {
-        // Device is off, automatically turn it on with the new temperature
-        this.platform.log.info(`Device is OFF, automatically turning ON with temperature ${newTemp}°C`, LogContext.ACCESSORY);
+      // If device is currently off, automatically turn it on
+      if (this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF) {
+        this.platform.log.info(`Auto-enabling device due to temperature change`, LogContext.ACCESSORY);
+        
+        // Set to AUTO mode
+        this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.AUTO;
+        
+        // Update HomeKit characteristic
+        this.service.updateCharacteristic(
+          this.Characteristic.TargetHeatingCoolingState,
+          this.targetHeatingState
+        );
         
         // Turn on the device in AUTO mode
-        const success = await this.apiClient.turnDeviceOn(this.deviceId, newTemp);
-        
-        if (success) {
-          // Update internal states
-          this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.AUTO;
-          
-          // Determine current heating/cooling state based on temperature difference
-          if (newTemp > this.currentTemperature + 0.5) {
-            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-          } else if (newTemp < this.currentTemperature - 0.5) {
-            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
-          } else {
-            // When temperatures are close, default to HEAT
-            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-          }
-          
-          // Update HomeKit characteristics
-          this.service.updateCharacteristic(
-            this.Characteristic.TargetHeatingCoolingState,
-            this.targetHeatingState
-          );
-          this.service.updateCharacteristic(
-            this.Characteristic.CurrentHeatingCoolingState,
-            this.currentHeatingState
-          );
-        } else {
-          throw new Error('Failed to turn device on');
-        }
+        await this.apiClient.turnDeviceOn(this.deviceId, newTemp);
       } else {
         // Device is already on, just update the temperature
-        const success = await this.apiClient.setTemperature(this.deviceId, newTemp);
-        
-        if (!success) {
-          throw new Error('Failed to set temperature');
-        }
-        
-        // Update current heating/cooling state based on new target temperature
-        if (this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.AUTO) {
-          // Only update the current state if in AUTO mode
-          if (newTemp > this.currentTemperature + 0.5) {
-            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-          } else if (newTemp < this.currentTemperature - 0.5) {
-            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
-          }
-          
-          this.service.updateCharacteristic(
-            this.Characteristic.CurrentHeatingCoolingState,
-            this.currentHeatingState
-          );
-        }
+        await this.apiClient.setTemperature(this.deviceId, newTemp);
       }
+      
+      // Update current state based on temperature difference
+      if (newTemp > this.currentTemperature + 0.5) {
+        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+      } else if (newTemp < this.currentTemperature - 0.5) {
+        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+      } else {
+        // When temperatures are close, default to HEAT
+        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+      }
+      
+      // Update HomeKit characteristics
+      this.service.updateCharacteristic(
+        this.Characteristic.CurrentHeatingCoolingState,
+        this.currentHeatingState
+      );
       
       // Refresh the device status after a short delay
       setTimeout(() => {
@@ -488,7 +459,7 @@ export class SleepMeAccessory {
 
   /**
    * Handler for TargetHeatingCoolingState SET
-   * Improved to ensure the device responds properly to HomeKit state changes
+   * Simplified to only handle OFF and AUTO states
    */
   private async handleTargetHeatingStateSet(value: CharacteristicValue): Promise<void> {
     const newState = value as number;
@@ -508,56 +479,6 @@ export class SleepMeAccessory {
             this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.OFF;
             
             // Update HomeKit characteristics
-            this.service.updateCharacteristic(
-              this.Characteristic.CurrentHeatingCoolingState,
-              this.currentHeatingState
-            );
-          }
-          break;
-        }
-        case this.Characteristic.TargetHeatingCoolingState.HEAT: {
-          // For heating, use a temperature higher than current temperature
-          let heatingTemp = Math.max(this.currentTemperature + 2, this.targetTemperature);
-          heatingTemp = this.validateTemperature(heatingTemp);
-          
-          success = await this.apiClient.turnDeviceOn(this.deviceId, heatingTemp);
-          
-          if (success) {
-            // Update internal states
-            this.targetHeatingState = newState;
-            this.targetTemperature = heatingTemp;
-            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-            
-            // Update HomeKit characteristics
-            this.service.updateCharacteristic(
-              this.Characteristic.TargetTemperature,
-              this.targetTemperature
-            );
-            this.service.updateCharacteristic(
-              this.Characteristic.CurrentHeatingCoolingState,
-              this.currentHeatingState
-            );
-          }
-          break;
-        }
-        case this.Characteristic.TargetHeatingCoolingState.COOL: {
-          // For cooling, use a temperature lower than current temperature
-          let coolingTemp = Math.min(this.currentTemperature - 2, this.targetTemperature);
-          coolingTemp = this.validateTemperature(coolingTemp);
-          
-          success = await this.apiClient.turnDeviceOn(this.deviceId, coolingTemp);
-          
-          if (success) {
-            // Update internal states
-            this.targetHeatingState = newState;
-            this.targetTemperature = coolingTemp;
-            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
-            
-            // Update HomeKit characteristics
-            this.service.updateCharacteristic(
-              this.Characteristic.TargetTemperature,
-              this.targetTemperature
-            );
             this.service.updateCharacteristic(
               this.Characteristic.CurrentHeatingCoolingState,
               this.currentHeatingState
@@ -593,7 +514,9 @@ export class SleepMeAccessory {
           }
           break;
         }
+        // We're ignoring HEAT and COOL modes since they aren't exposed to HomeKit
       }
+      
       if (!success) {
         throw new Error(`Failed to set target state to ${this.getHeatingStateName(newState)}`);
       }
@@ -673,5 +596,53 @@ export class SleepMeAccessory {
       default:
         return `UNKNOWN(${state})`;
     }
+  }
+
+  /**
+   * Handle a scheduled event from the scheduler
+   * This updates the HomeKit state to match scheduled changes
+   */
+  public handleScheduledEvent(eventData: { deviceId: string, temperature: number, state: string }): void {
+    if (eventData.deviceId !== this.deviceId) {
+      return; // Not for this device
+    }
+    
+    this.platform.log.debug(
+      `Handling scheduled event: temp=${eventData.temperature}°C, state=${eventData.state}`,
+      LogContext.ACCESSORY
+    );
+    
+    // Update internal state
+    this.targetTemperature = eventData.temperature;
+    
+    if (eventData.state === 'auto') {
+      this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.AUTO;
+      
+      // Update current heating state based on temperature difference
+      if (this.targetTemperature > this.currentTemperature + 0.5) {
+        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+      } else if (this.targetTemperature < this.currentTemperature - 0.5) {
+        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+      } else {
+        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+      }
+    } else {
+      this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.OFF;
+      this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.OFF;
+    }
+    
+    // Update HomeKit characteristics
+    this.service.updateCharacteristic(
+      this.Characteristic.TargetTemperature,
+      this.targetTemperature
+    );
+    this.service.updateCharacteristic(
+      this.Characteristic.TargetHeatingCoolingState,
+      this.targetHeatingState
+    );
+    this.service.updateCharacteristic(
+      this.Characteristic.CurrentHeatingCoolingState,
+      this.currentHeatingState
+    );
   }
 }
