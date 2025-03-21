@@ -1,6 +1,6 @@
 # Homebridge SleepMe Basic
 
-A Homebridge plugin for controlling SleepMe devices (ChiliPad, OOLER, Dock Pro) through Apple HomeKit. This plugin provides basic thermostat functionality, allowing you to control your SleepMe device's temperature and operating mode directly from the Home app on your iOS devices or via Siri.
+A Homebridge plugin that provides Apple HomeKit integration for SleepMe devices (ChiliPad, OOLER, Dock Pro), allowing you to control temperature and mode directly from the Home app or via Siri.
 
 <p align="center">
 <img src="https://github.com/homebridge/branding/raw/master/logos/homebridge-color-round-stylized.png" width="150">
@@ -8,12 +8,14 @@ A Homebridge plugin for controlling SleepMe devices (ChiliPad, OOLER, Dock Pro) 
 
 ## Features
 
-- Control your SleepMe device as a HomeKit thermostat
-- View current water temperature
-- Set target temperature
-- Control heating/cooling modes
-- Customize device names
-- Comprehensive logging for troubleshooting
+- **HomeKit Thermostat Control**: Manage your SleepMe device as a standard HomeKit thermostat
+- **Temperature Control**: Set and monitor your bed temperature precisely
+- **Auto/Off Modes**: Toggle your device on and off easily
+- **Model Auto-Detection**: Automatically identifies ChiliPad, OOLER, or Dock Pro models
+- **Water Level Monitoring**: View water level status right in HomeKit
+- **Temperature Scheduling**: Set schedules for automatic temperature changes throughout the day/week
+- **Warm Hug Feature**: Gradually warm your bed before scheduled times for maximum comfort
+- **Robust API Integration**: Communicates directly with SleepMe's developer API
 
 ## Installation
 
@@ -43,6 +45,22 @@ Configuration can be done through the Homebridge UI or by manually editing your 
       "unit": "C",
       "debugMode": false,
       "pollingInterval": 60,
+      "enableScheduling": true,
+      "schedules": [
+        {
+          "time": "22:30",
+          "temperature": 30,
+          "dayType": "everyday",
+          "warmHug": true,
+          "warmHugDuration": "20"
+        },
+        {
+          "time": "06:30",
+          "temperature": 18,
+          "dayType": "weekday",
+          "warmHug": false
+        }
+      ],
       "devices": [
         {
           "id": "zx-YOUR_DEVICE_ID",
@@ -63,16 +81,43 @@ Configuration can be done through the Homebridge UI or by manually editing your 
 | `apiToken` | string | Required | Your SleepMe API token |
 | `unit` | string | "C" | Temperature unit ("C" for Celsius, "F" for Fahrenheit) |
 | `debugMode` | boolean | false | Enable detailed logging for troubleshooting |
-| `pollingInterval` | number | 60 | How often to check device status (in seconds) |
+| `pollingInterval` | number | 120 | How often to check device status (in seconds) |
+| `enableScheduling` | boolean | false | Enable temperature scheduling feature |
 | `devices` | array | [] | Optional: Customize names for specific devices |
+
+### Scheduling Options
+
+If `enableScheduling` is set to `true`, you can define schedules with these properties:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `time` | string | Time in 24-hour format (HH:MM) |
+| `temperature` | number | Target temperature (in Celsius) |
+| `dayType` | string | "everyday", "weekday", "weekend", or "specific" |
+| `specificDay` | string | Day number when `dayType` is "specific" (0-6, 0=Sunday) |
+| `warmHug` | boolean | Enable gradual warming before scheduled time |
+| `warmHugDuration` | string | Duration in minutes for gradual warming (10-60) |
 
 ## Obtaining an API Token
 
 To use this plugin, you need an API token from SleepMe:
 
-1. Visit [developer.sleep.me](https://developer.sleep.me) (if available)
+1. Visit [developer.sleep.me](https://developer.sleep.me)
 2. Or contact SleepMe customer support to request API access
 3. Once you have your token, add it to the plugin configuration
+
+## How It Works
+
+This plugin creates a HomeKit thermostat accessory for each of your SleepMe devices. The thermostat interface allows you to:
+
+- **View current temperature** of your SleepMe device
+- **Set target temperature** by adjusting the thermostat
+- **Turn on/off** via the thermostat power controls (AUTO/OFF modes)
+- **Monitor heating/cooling status** as your device works to reach the target temperature
+
+If water level monitoring is supported by your device, this information will be provided through a "battery" service that shows water level percentage and low water warnings.
+
+The scheduler feature enables automatic temperature changes based on the time of day. The "Warm Hug" feature gradually increases the temperature to create a warm wake up 'hug' experience which may function like an alarm to rouse you gently.
 
 ## Troubleshooting
 
@@ -81,7 +126,8 @@ To use this plugin, you need an API token from SleepMe:
 If you're having issues, enable debug mode in the plugin configuration. This will provide detailed logs to help diagnose problems:
 
 ```json
-"debugMode": true
+"debugMode": true,
+"verboseLogging": true
 ```
 
 ### Common Issues
@@ -89,6 +135,7 @@ If you're having issues, enable debug mode in the plugin configuration. This wil
 1. **Authentication Error**: Check that your API token is correct and still valid.
 2. **No Devices Found**: Ensure your SleepMe device is online and properly set up in the SleepMe app.
 3. **Connection Issues**: Check your network connection and ensure your Homebridge server can connect to the internet.
+4. **API Rate Limiting**: The plugin includes protection against excessive API requests, but if you experience rate limiting, try increasing the `pollingInterval` value.
 
 ### Log Analysis
 
@@ -98,6 +145,7 @@ The plugin produces detailed logs when debug mode is enabled. Key log sections i
 - `[API]` - API communication with SleepMe servers
 - `[ACCESSORY]` - Thermostat accessory setup and state management
 - `[HOMEKIT]` - HomeKit characteristic interactions
+- `[SCHEDULER]` - Schedule and Warm Hug functionality
 
 ## Development
 
@@ -105,6 +153,12 @@ The plugin produces detailed logs when debug mode is enabled. Key log sections i
 
 ```bash
 npm run build
+```
+
+### Linting
+
+```bash
+npm run lint
 ```
 
 ### Contributing
@@ -117,13 +171,10 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Disclaimer
 
-This plugin is not officially associated with SleepMe. Use at your own risk.
+This plugin is not officially associated with SleepMe (makers of ChiliPad, OOLER, and Dock Pro). Use at your own risk.
 
-## Roadmap
+## Compatibility
 
-Future plans for this plugin include:
-
-- Humidity sensor support
-- Temperature scheduling
-- Warm awake feature
-- Historical data tracking
+- Requires Homebridge v1.8.0 or later
+- Tested with Node v18+
+- Compatible with all SleepMe devices that support the developer API
