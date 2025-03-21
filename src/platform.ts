@@ -47,6 +47,10 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   // Timer for periodic discovery
   private discoveryTimer?: NodeJS.Timeout;
   
+  // Startup phase tracking
+  private isStartupPhase = true;
+  private startupTimer?: NodeJS.Timeout;
+  
   constructor(
     logger: Logger,
     public readonly config: PlatformConfig,
@@ -59,8 +63,9 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     // Extract configuration options
     this.temperatureUnit = (config.unit as string) || 'C';
     
-    // Set polling interval with proper validation (use the top-level value now)
-    this.pollingInterval = Math.max(30, Math.min(300, 
+    // Set polling interval with proper validation
+    // Use a longer interval by default to reduce API calls
+    this.pollingInterval = Math.max(120, Math.min(600, 
       parseInt(String(config.pollingInterval)) || DEFAULT_POLLING_INTERVAL));
     
     // Set debug mode
@@ -91,18 +96,32 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       LogContext.PLATFORM
     );
     
+    // Mark the end of startup phase after 2 minutes
+    this.startupTimer = setTimeout(() => {
+      this.isStartupPhase = false;
+      this.log.info('Exiting startup phase - regular operation begins', LogContext.PLATFORM);
+    }, 120000); // 2 minutes
+    
     // When this event is fired, homebridge has restored all cached accessories
     this.homebridgeApi.on('didFinishLaunching', () => {
-      this.log.info('Homebridge finished launching, starting device discovery', LogContext.PLATFORM);
-      this.discoverDevices();
-      
-      // Initialize schedules from config
-      this.initializeSchedules();
+      // Delay device discovery to prevent immediate API calls
+      setTimeout(() => {
+        this.log.info('Homebridge finished launching, starting device discovery', LogContext.PLATFORM);
+        this.discoverDevices();
+        
+        // Further delay schedule initialization
+        setTimeout(() => {
+          this.initializeSchedules();
+        }, 30000);
+      }, 10000); // 10 second delay before starting discovery
       
       // Set up periodic discovery to catch new or changed devices
+      // Reduced frequency to once per day instead of every 12 hours
       this.discoveryTimer = setInterval(() => {
-        this.discoverDevices();
-      }, 12 * 60 * 60 * 1000); // Check every 12 hours
+        if (!this.isStartupPhase) { // Skip during startup phase
+          this.discoverDevices();
+        }
+      }, 24 * 60 * 60 * 1000); // Check once per day
     });
     
     this.homebridgeApi.on('shutdown', () => {
@@ -110,12 +129,14 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       if (this.discoveryTimer) {
         clearInterval(this.discoveryTimer);
       }
+      if (this.startupTimer) {
+        clearTimeout(this.startupTimer);
+      }
       
       // Clean up scheduler
       this.scheduler.cleanup();
     });
   }
-  
   /**
    * Called when cached accessories are restored at startup
    */
@@ -137,7 +158,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   }
   
   /**
-   * Discover SleepMe devices and create accessories
+   * Discover SleepMe devices and create accessories with staggered initialization
    */
   async discoverDevices(): Promise<void> {
     this.log.info('Starting device discovery...', LogContext.PLATFORM);
@@ -159,11 +180,20 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       // Track which accessories are still active
       const activeDeviceIds = new Set<string>();
       
-      // Process each device
-      for (const device of devices) {
+      // Process each device with delays between initializations
+      for (let i = 0; i < devices.length; i++) {
+        const device = devices[i];
+        
         if (!device.id) {
           this.log.warn(`Skipping device with missing ID: ${JSON.stringify(device)}`, LogContext.PLATFORM);
           continue;
+        }
+        
+        // Stagger device initialization to prevent API rate limiting
+        if (i > 0) {
+          const staggerDelay = 20000 + Math.floor(Math.random() * 10000); // 20-30 second delay
+          this.log.info(`Waiting ${Math.round(staggerDelay/1000)}s before initializing next device...`, LogContext.PLATFORM);
+          await new Promise(resolve => setTimeout(resolve, staggerDelay));
         }
         
         activeDeviceIds.add(device.id);
@@ -193,8 +223,10 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
           // Update platform accessories
           this.homebridgeApi.updatePlatformAccessories([existingAccessory]);
           
-          // Create new accessory handler
-          this.initializeAccessory(existingAccessory, device.id);
+          // Create new accessory handler with delay
+          setTimeout(() => {
+            this.initializeAccessory(existingAccessory, device.id);
+          }, 3000); // 3 second delay
         } else {
           // Create a new accessory
           this.log.info(`Adding new accessory: ${displayName} (ID: ${device.id})`, LogContext.PLATFORM);
@@ -204,8 +236,10 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
           // Store device info in the accessory context
           accessory.context.device = device;
           
-          // Initialize the accessory
-          this.initializeAccessory(accessory, device.id);
+          // Initialize the accessory with delay
+          setTimeout(() => {
+            this.initializeAccessory(accessory, device.id);
+          }, 3000); // 3 second delay
           
           // Register the accessory
           this.homebridgeApi.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
@@ -224,7 +258,6 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       );
     }
   }
-  
   /**
    * Initialize an accessory with its handler
    * Updated to connect scheduler events to the accessory
@@ -237,8 +270,21 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     if (existingHandler) {
       existingHandler.cleanup();
       this.accessoryInstances.delete(deviceId);
+      
+      // Add a small delay before creating the new handler
+      setTimeout(() => {
+        this.createAccessoryHandler(accessory, deviceId);
+      }, 5000);
+    } else {
+      // Create handler immediately if no existing one
+      this.createAccessoryHandler(accessory, deviceId);
     }
-    
+  }
+  
+  /**
+   * Create a new accessory handler
+   */
+  private createAccessoryHandler(accessory: PlatformAccessory, deviceId: string): void {
     // Create new accessory handler
     const handler = new SleepMeAccessory(this, accessory, this.api);
     
@@ -315,9 +361,9 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       return [];
     }
   }
-  
   /**
    * Initialize schedules from configuration
+   * Modified to process schedules one by one with delays
    */
   private initializeSchedules(): void {
     const schedulerSettings = this.config.schedulerSettings;
@@ -330,63 +376,9 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     this.log.info('Initializing schedules from config', LogContext.PLATFORM);
     
     try {
-      // Process each device schedule
+      // Process schedules one by one with delays
       if (Array.isArray(schedulerSettings.schedules)) {
-        for (const deviceSchedule of schedulerSettings.schedules) {
-          const deviceId = deviceSchedule.deviceId;
-          
-          if (!deviceId) {
-            this.log.warn('Schedule missing device ID, skipping', LogContext.PLATFORM);
-            continue;
-          }
-          
-          // Create schedule structure
-          const schedule: DeviceSchedule = {
-            deviceId,
-            events: [],
-            enabled: true
-          };
-          
-          // Process schedule items
-          if (Array.isArray(deviceSchedule.scheduleItems)) {
-            for (const item of deviceSchedule.scheduleItems) {
-              // Convert day type to day array
-              let days: number[] = [];
-              switch (item.dayType) {
-                case 'everyday':
-                  days = [0, 1, 2, 3, 4, 5, 6]; // All days
-                  break;
-                case 'weekday':
-                  days = [1, 2, 3, 4, 5]; // Monday to Friday
-                  break;
-                case 'weekend':
-                  days = [0, 6]; // Sunday and Saturday
-                  break;
-                case 'specific':
-                  // Convert string to number for specific day
-                  days = [parseInt(item.specificDay, 10)];
-                  break;
-              }
-              
-              // Create event
-              const event: ScheduledEvent = {
-                id: `evt_${Math.random().toString(36).substring(2, 15)}`,
-                enabled: true, // Default to enabled
-                time: item.time,
-                temperature: item.temperature,
-                days,
-                warmHug: item.warmHug || false,
-                warmHugDuration: item.warmHugDuration || 20
-              };
-              
-              schedule.events.push(event);
-            }
-          }
-          
-          // Set the schedule
-          this.scheduler.setDeviceSchedule(schedule);
-          this.log.info(`Initialized schedule for device ${deviceId} with ${schedule.events.length} events`, LogContext.PLATFORM);
-        }
+        this.processScheduleQueue(schedulerSettings.schedules);
       }
     } catch (error) {
       this.log.error(
@@ -394,5 +386,75 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
         LogContext.PLATFORM
       );
     }
+  }
+  
+  /**
+   * Process schedules one by one with delays between them
+   */
+  private processScheduleQueue(schedules: any[], index = 0): void {
+    if (index >= schedules.length) {
+      this.log.info(`All schedules processed (${schedules.length} total)`, LogContext.PLATFORM);
+      return;
+    }
+    
+    const deviceSchedule = schedules[index];
+    const deviceId = deviceSchedule.deviceId;
+    
+    if (!deviceId) {
+      this.log.warn('Schedule missing device ID, skipping', LogContext.PLATFORM);
+      // Continue with next schedule after delay
+      setTimeout(() => this.processScheduleQueue(schedules, index + 1), 5000);
+      return;
+    }
+    
+    // Create schedule structure
+    const schedule: DeviceSchedule = {
+      deviceId,
+      events: [],
+      enabled: true
+    };
+    
+    // Process schedule items
+    if (Array.isArray(deviceSchedule.scheduleItems)) {
+      for (const item of deviceSchedule.scheduleItems) {
+        // Convert day type to day array
+        let days: number[] = [];
+        switch (item.dayType) {
+          case 'everyday':
+            days = [0, 1, 2, 3, 4, 5, 6]; // All days
+            break;
+          case 'weekday':
+            days = [1, 2, 3, 4, 5]; // Monday to Friday
+            break;
+          case 'weekend':
+            days = [0, 6]; // Sunday and Saturday
+            break;
+          case 'specific':
+            // Convert string to number for specific day
+            days = [parseInt(item.specificDay, 10)];
+            break;
+        }
+        
+        // Create event
+        const event: ScheduledEvent = {
+          id: `evt_${Math.random().toString(36).substring(2, 15)}`,
+          enabled: true, // Default to enabled
+          time: item.time,
+          temperature: item.temperature,
+          days,
+          warmHug: item.warmHug || false,
+          warmHugDuration: item.warmHugDuration || 20
+        };
+        
+        schedule.events.push(event);
+      }
+    }
+    
+    // Set the schedule
+    this.scheduler.setDeviceSchedule(schedule);
+    this.log.info(`Initialized schedule for device ${deviceId} with ${schedule.events.length} events`, LogContext.PLATFORM);
+    
+    // Process next schedule after a delay
+    setTimeout(() => this.processScheduleQueue(schedules, index + 1), 10000); // 10 second delay
   }
 }

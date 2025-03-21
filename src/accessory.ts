@@ -40,6 +40,7 @@ export class SleepMeAccessory {
   private statusUpdateTimer?: NodeJS.Timeout;
   private pendingUpdates = false;
   private scheduleTimer?: NodeJS.Timeout;
+  private initialStatusComplete = false;
   
   // Constants from the platform
   private readonly Characteristic;
@@ -110,25 +111,43 @@ export class SleepMeAccessory {
     this.service.getCharacteristic(this.Characteristic.TemperatureDisplayUnits)
       .updateValue(displayUnits)
       .onGet(() => displayUnits);
+      // STAGGERED INITIALIZATION: Use a delayed approach to prevent rate limiting
+    this.platform.log.info(
+      `Scheduling delayed initialization for: ${this.displayName} (ID: ${this.deviceId})`,
+      LogContext.ACCESSORY
+    );
     
-    // Initialize the device state
-    this.refreshDeviceStatus()
-      .catch(error => this.platform.log.error(
-        `Error initializing device status: ${error instanceof Error ? error.message : String(error)}`,
-        LogContext.ACCESSORY
-      ));
-    
-    // Set up polling interval
-    this.setupStatusPolling();
-    
-    // Set up schedule polling
-    this.setupSchedulePolling();
-    
+    // Log that accessory is initialized with default values
     this.platform.log.info(`Accessory initialized: ${this.displayName} (ID: ${this.deviceId})`, LogContext.ACCESSORY);
+    
+    // Delay initial status fetch to prevent rate limiting at startup
+    // Use a random delay between 15-45 seconds
+    const initialDelay = 15000 + Math.floor(Math.random() * 30000);
+    setTimeout(() => {
+      this.refreshDeviceStatus()
+        .then(() => {
+          this.initialStatusComplete = true;
+        })
+        .catch(error => this.platform.log.error(
+          `Error initializing device status: ${error instanceof Error ? error.message : String(error)}`,
+          LogContext.ACCESSORY
+        ));
+        
+      // Set up polling intervals with further staggered delays
+      setTimeout(() => {
+        this.setupStatusPolling();
+        
+        // Further delay schedule polling setup
+        setTimeout(() => {
+          this.setupSchedulePolling();
+        }, 5000);
+      }, 10000);
+    }, initialDelay);
   }
 
   /**
    * Set up the status polling mechanism
+   * Modified to add jitter to prevent synchronized API calls
    */
   private setupStatusPolling(): void {
     // Clear any existing timer
@@ -136,8 +155,10 @@ export class SleepMeAccessory {
       clearInterval(this.statusUpdateTimer);
     }
     
-    // Convert polling interval from seconds to milliseconds
-    const intervalMs = this.platform.pollingInterval * 1000;
+    // Add jitter to polling interval to prevent all devices polling simultaneously
+    // This helps prevent rate limiting by spreading out API calls
+    const jitter = Math.floor(Math.random() * 30000); // Up to 30 seconds jitter
+    const intervalMs = (this.platform.pollingInterval * 1000) + jitter;
     
     this.statusUpdateTimer = setInterval(() => {
       this.refreshDeviceStatus().catch(error => {
@@ -149,7 +170,8 @@ export class SleepMeAccessory {
     }, intervalMs);
     
     this.platform.log.debug(
-      `Polling scheduled every ${this.platform.pollingInterval} seconds`,
+      `Polling scheduled every ${Math.round(intervalMs/1000)} seconds ` +
+      `(base: ${this.platform.pollingInterval}s + jitter)`,
       LogContext.ACCESSORY
     );
   }
@@ -182,24 +204,23 @@ export class SleepMeAccessory {
       }
     }, 30000);
   }
-  
- /**
- * Log device connection status
- */
-private logConnectionStatus(connected: boolean): void {
-  // Just log the status change
-  if (!connected) {
-    this.platform.log.warn(
-      `Device ${this.deviceId} appears to be offline or unreachable`,
-      LogContext.ACCESSORY
-    );
-  } else {
-    this.platform.log.debug(
-      `Device ${this.deviceId} is online and reachable`,
-      LogContext.ACCESSORY
-    );
+  /**
+   * Log device connection status
+   */
+  private logConnectionStatus(connected: boolean): void {
+    // Just log the status change
+    if (!connected) {
+      this.platform.log.warn(
+        `Device ${this.deviceId} appears to be offline or unreachable`,
+        LogContext.ACCESSORY
+      );
+    } else {
+      this.platform.log.debug(
+        `Device ${this.deviceId} is online and reachable`,
+        LogContext.ACCESSORY
+      );
+    }
   }
-}
 
   /**
    * Update or create the water level service
@@ -291,9 +312,9 @@ private logConnectionStatus(connected: boolean): void {
     
     this.platform.log.info(`Cleaned up accessory: ${this.displayName}`, LogContext.ACCESSORY);
   }
-  
   /**
    * Refresh the device status from the API
+   * Enhanced with stricter update throttling and better error handling
    */
   private async refreshDeviceStatus(): Promise<void> {
     // Prevent multiple concurrent updates
@@ -303,19 +324,30 @@ private logConnectionStatus(connected: boolean): void {
       return;
     }
     
+    // Throttle updates - skip if updated recently (within 30 seconds) unless initial or pending
+    const now = Date.now();
+    const timeSinceLastUpdate = now - this.lastUpdateTime;
+    if (timeSinceLastUpdate < 30000 && this.initialStatusComplete && !this.pendingUpdates) {
+      this.platform.log.debug('Skipping status update - updated recently', LogContext.ACCESSORY);
+      return;
+    }
+    
     // Add retry logic
     let attempts = 0;
     const maxAttempts = 3;
     
     this.isUpdating = true;
-    this.lastUpdateTime = Date.now();
+    this.lastUpdateTime = now;
     this.pendingUpdates = false;
     
     try {
       while (attempts < maxAttempts) {
         try {
           attempts++;
-          this.platform.log.debug(`Refreshing status for device ${this.deviceId} (attempt ${attempts}/${maxAttempts})`, LogContext.ACCESSORY);
+          this.platform.log.debug(
+            `Refreshing status for device ${this.deviceId} (attempt ${attempts}/${maxAttempts})`, 
+            LogContext.ACCESSORY
+          );
           
           // Get the device status from the API
           const status = await this.apiClient.getDeviceStatus(this.deviceId);
@@ -351,8 +383,9 @@ private logConnectionStatus(connected: boolean): void {
             );
           }
           
-          // Update temperature values
-          if (status.currentTemperature !== this.currentTemperature) {
+          // Update temperature values only if they've changed significantly (0.5°C)
+          // This reduces unnecessary HomeKit updates
+          if (Math.abs(status.currentTemperature - this.currentTemperature) >= 0.5) {
             this.currentTemperature = status.currentTemperature;
             this.service.updateCharacteristic(
               this.Characteristic.CurrentTemperature,
@@ -360,7 +393,7 @@ private logConnectionStatus(connected: boolean): void {
             );
           }
           
-          if (status.targetTemperature !== this.targetTemperature) {
+          if (Math.abs(status.targetTemperature - this.targetTemperature) >= 0.5) {
             this.targetTemperature = status.targetTemperature;
             this.service.updateCharacteristic(
               this.Characteristic.TargetTemperature,
@@ -388,11 +421,10 @@ private logConnectionStatus(connected: boolean): void {
             );
           }
           
-         // Log connection status if available
-if (status.connected !== undefined) {
-  this.logConnectionStatus(status.connected);
-}
-          
+          // Log connection status if available
+          if (status.connected !== undefined) {
+            this.logConnectionStatus(status.connected);
+          }
           // Update water level service if water level data is available
           if (status.rawResponse) {
             // Extract water level data from raw response
@@ -402,7 +434,9 @@ if (status.connected !== undefined) {
             const isWaterLow = this.apiClient.extractNestedValue(status.rawResponse, 'status.is_water_low') || 
                               this.apiClient.extractNestedValue(status.rawResponse, 'is_water_low') || false;
             
-            if (waterLevel !== undefined && waterLevel !== this.waterLevel) {
+            // Only update if values have changed - reduces HomeKit updates
+            if (waterLevel !== undefined && 
+               (waterLevel !== this.waterLevel || isWaterLow !== this.isWaterLow)) {
               this.waterLevel = waterLevel;
               this.isWaterLow = isWaterLow;
               this.updateWaterLevelService(this.waterLevel, this.isWaterLow);
@@ -420,14 +454,15 @@ if (status.connected !== undefined) {
           
           if (attempts < maxAttempts) {
             // Wait before retrying - exponential backoff
-            await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
+            const retryDelay = Math.pow(2, attempts) * 3000; // 6s, 12s, 24s
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
           }
         }
       }
     } finally {
       this.isUpdating = false;
       
-      // Process any pending updates
+      // Process any pending updates with a longer delay to prevent rapid retries
       if (this.pendingUpdates) {
         setTimeout(() => {
           if (this.pendingUpdates) {
@@ -436,7 +471,7 @@ if (status.connected !== undefined) {
               this.platform.log.error(`Deferred status update failed: ${error}`, LogContext.ACCESSORY)
             );
           }
-        }, 2000);
+        }, 15000); // Wait 15 seconds before retrying
       }
     }
   }
@@ -518,7 +553,7 @@ if (status.connected !== undefined) {
   
   /**
    * Handler for TargetTemperature SET
-   * Enhanced to automatically enable the device when temp changes
+   * Enhanced to intelligently delay and batch updates
    */
   private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<void> {
     const newTemp = this.validateTemperature(value as number);
@@ -558,28 +593,36 @@ if (status.connected !== undefined) {
         );
         
         // Turn on the device in AUTO mode with the new temperature
-        await this.apiClient.turnDeviceOn(this.deviceId, newTemp);
+        // Add a small delay to prevent rate limiting when multiple characteristic 
+        // changes occur in quick succession
+        setTimeout(async () => {
+          await this.apiClient.turnDeviceOn(this.deviceId, newTemp);
+        }, 500); 
       } else {
-        // Device is already on, just update the temperature
-        await this.apiClient.setTemperature(this.deviceId, newTemp);
-        
-        // Update current state based on temperature difference
-        if (newTemp > this.currentTemperature + 0.5) {
-          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-          this.service.updateCharacteristic(
-            this.Characteristic.CurrentHeatingCoolingState,
-            this.currentHeatingState
-          );
-        } else if (newTemp < this.currentTemperature - 0.5) {
-          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
-          this.service.updateCharacteristic(
-            this.Characteristic.CurrentHeatingCoolingState,
-            this.currentHeatingState
-          );
-        }
+        // Device is already on, just update the temperature after a small delay
+        // This prevents multiple rapid API calls when the user is adjusting the temperature
+        setTimeout(async () => {
+          await this.apiClient.setTemperature(this.deviceId, newTemp);
+          
+          // Update current state based on temperature difference
+          if (newTemp > this.currentTemperature + 0.5) {
+            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+            this.service.updateCharacteristic(
+              this.Characteristic.CurrentHeatingCoolingState,
+              this.currentHeatingState
+            );
+          } else if (newTemp < this.currentTemperature - 0.5) {
+            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+            this.service.updateCharacteristic(
+              this.Characteristic.CurrentHeatingCoolingState,
+              this.currentHeatingState
+            );
+          }
+        }, 500);
       }
       
-      // Refresh the device status after a short delay to confirm changes
+      // Refresh the device status after a delay to confirm changes
+      // Use a longer delay to allow API operations to complete
       setTimeout(() => {
         this.refreshDeviceStatus().catch(error => {
           this.platform.log.error(
@@ -587,7 +630,7 @@ if (status.connected !== undefined) {
             LogContext.ACCESSORY
           );
         });
-      }, 2000);
+      }, 5000); // 5 second delay
     } catch (error) {
       this.platform.log.error(
         `Failed to set target temperature: ${error instanceof Error ? error.message : String(error)}`,
@@ -606,7 +649,10 @@ if (status.connected !== undefined) {
    * Handler for CurrentHeatingCoolingState GET
    */
   private async handleCurrentHeatingStateGet(): Promise<CharacteristicValue> {
-    this.platform.log.debug(`GET CurrentHeatingCoolingState: ${this.getHeatingStateName(this.currentHeatingState)}`, LogContext.HOMEKIT);
+    this.platform.log.debug(
+      `GET CurrentHeatingCoolingState: ${this.getHeatingStateName(this.currentHeatingState)}`, 
+      LogContext.HOMEKIT
+    );
     return this.currentHeatingState;
   }
 
@@ -614,73 +660,84 @@ if (status.connected !== undefined) {
    * Handler for TargetHeatingCoolingState GET
    */
   private async handleTargetHeatingStateGet(): Promise<CharacteristicValue> {
-    this.platform.log.debug(`GET TargetHeatingCoolingState: ${this.getHeatingStateName(this.targetHeatingState)}`, LogContext.HOMEKIT);
+    this.platform.log.debug(
+      `GET TargetHeatingCoolingState: ${this.getHeatingStateName(this.targetHeatingState)}`, 
+      LogContext.HOMEKIT
+    );
     return this.targetHeatingState;
   }
 
   /**
    * Handler for TargetHeatingCoolingState SET
-   * Simplified to only handle OFF and AUTO states
+   * Enhanced with delays to prevent rate limiting
    */
   private async handleTargetHeatingStateSet(value: CharacteristicValue): Promise<void> {
     const newState = value as number;
-    this.platform.log.debug(`SET TargetHeatingCoolingState: ${this.getHeatingStateName(newState)}`, LogContext.HOMEKIT);
+    this.platform.log.debug(
+      `SET TargetHeatingCoolingState: ${this.getHeatingStateName(newState)}`, 
+      LogContext.HOMEKIT
+    );
     
     try {
-      let success = false;
+      // Update internal state immediately for better responsiveness
+      this.targetHeatingState = newState;
       
-      switch (newState) {
-        case this.Characteristic.TargetHeatingCoolingState.OFF: {
-          // Turn off the device
-          success = await this.apiClient.turnDeviceOff(this.deviceId);
-          
-          if (success) {
-            // Update internal state immediately for better responsiveness
-            this.targetHeatingState = newState;
-            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.OFF;
+      // Add small delay to avoid multiple rapid API calls
+      setTimeout(async () => {
+        let success = false;
+        
+        switch (newState) {
+          case this.Characteristic.TargetHeatingCoolingState.OFF: {
+            // Turn off the device
+            success = await this.apiClient.turnDeviceOff(this.deviceId);
             
-            // Update HomeKit characteristics
-            this.service.updateCharacteristic(
-              this.Characteristic.CurrentHeatingCoolingState,
-              this.currentHeatingState
-            );
-          }
-          break;
-        }
-        case this.Characteristic.TargetHeatingCoolingState.AUTO: {
-          // Turn on in auto mode with current target temperature
-          success = await this.apiClient.turnDeviceOn(this.deviceId, this.targetTemperature);
-          
-          if (success) {
-            // Update internal states
-            this.targetHeatingState = newState;
-            
-            // Determine current heating/cooling state based on temperature difference
-            if (this.targetTemperature > this.currentTemperature + 0.5) {
-              this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-            } else if (this.targetTemperature < this.currentTemperature - 0.5) {
-              this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
-            } else {
-              // When temperatures are close, use the last non-OFF state or default to HEAT
-              this.currentHeatingState = 
-                (this.currentHeatingState !== this.Characteristic.CurrentHeatingCoolingState.OFF) ? 
-                this.currentHeatingState : this.Characteristic.CurrentHeatingCoolingState.HEAT;
+            if (success) {
+              // Update internal state immediately for better responsiveness
+              this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.OFF;
+              
+              // Update HomeKit characteristics
+              this.service.updateCharacteristic(
+                this.Characteristic.CurrentHeatingCoolingState,
+                this.currentHeatingState
+              );
             }
-            
-            // Update HomeKit characteristic
-            this.service.updateCharacteristic(
-              this.Characteristic.CurrentHeatingCoolingState,
-              this.currentHeatingState
-            );
+            break;
           }
-          break;
+          case this.Characteristic.TargetHeatingCoolingState.AUTO: {
+            // Turn on in auto mode with current target temperature
+            success = await this.apiClient.turnDeviceOn(this.deviceId, this.targetTemperature);
+            
+            if (success) {
+              // Determine current heating/cooling state based on temperature difference
+              if (this.targetTemperature > this.currentTemperature + 0.5) {
+                this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+              } else if (this.targetTemperature < this.currentTemperature - 0.5) {
+                this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+              } else {
+                // When temperatures are close, use the last non-OFF state or default to HEAT
+                this.currentHeatingState = 
+                  (this.currentHeatingState !== this.Characteristic.CurrentHeatingCoolingState.OFF) ? 
+                  this.currentHeatingState : this.Characteristic.CurrentHeatingCoolingState.HEAT;
+              }
+              
+              // Update HomeKit characteristic
+              this.service.updateCharacteristic(
+                this.Characteristic.CurrentHeatingCoolingState,
+                this.currentHeatingState
+              );
+            }
+            break;
+          }
+          // We're ignoring HEAT and COOL modes since they aren't exposed to HomeKit
         }
-        // We're ignoring HEAT and COOL modes since they aren't exposed to HomeKit
-      }
-      
-      if (!success) {
-        throw new Error(`Failed to set target state to ${this.getHeatingStateName(newState)}`);
-      }
+        
+        if (!success) {
+          this.platform.log.error(
+            `Failed to set target state to ${this.getHeatingStateName(newState)}`,
+            LogContext.ACCESSORY
+          );
+        }
+      }, 500); // 500ms delay
       
       // Refresh device status after a short delay for better feedback
       setTimeout(() => {
@@ -690,7 +747,7 @@ if (status.connected !== undefined) {
             LogContext.ACCESSORY
           );
         });
-      }, 2000);
+      }, 5000); // 5 second delay
     } catch (error) {
       this.platform.log.error(
         `Failed to set target heating state: ${error instanceof Error ? error.message : String(error)}`,
@@ -704,7 +761,6 @@ if (status.connected !== undefined) {
       );
     }
   }
-
   /**
    * Validate and constrain temperature values
    */
@@ -781,6 +837,8 @@ if (status.connected !== undefined) {
       
       // Update current heating state based on temperature difference
       if (this.targetTemperature > this.currentTemperature + 0.5) {
+        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+      } else if (this.targetTemperature < this.currentTemperature - 0.5) {
         this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
       } else {
         this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
