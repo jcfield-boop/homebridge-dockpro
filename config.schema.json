@@ -26,11 +26,9 @@
         "enumNames": ["Celsius (°C)", "Fahrenheit (°F)"],
         "description": "Select preferred temperature unit"
       },
-      "scheduler": {
+      "schedulerSettings": {
         "title": "Temperature Scheduler",
         "type": "object",
-        "expandable": true,
-        "expanded": false,
         "properties": {
           "enabled": {
             "title": "Enable Scheduling",
@@ -57,7 +55,6 @@
                 "scheduleItems": {
                   "title": "Schedule Items",
                   "type": "array",
-                  "maxItems": 100,
                   "items": {
                     "type": "object",
                     "properties": {
@@ -126,27 +123,19 @@
           }
         }
       },
-      "advanced": {
-        "type": "object",
-        "title": "Advanced Settings",
-        "expandable": true,
-        "expanded": false,
-        "properties": {
-          "debugMode": {
-            "title": "Debug Mode",
-            "type": "boolean",
-            "default": false,
-            "description": "Enable verbose logging for troubleshooting"
-          },
-          "pollingInterval": {
-            "title": "Polling Interval",
-            "type": "integer",
-            "default": 60,
-            "minimum": 30,
-            "maximum": 300,
-            "description": "How frequently to check device status (in seconds)"
-          }
-        }
+      "pollingInterval": {
+        "title": "Polling Interval",
+        "type": "integer",
+        "default": 60,
+        "minimum": 30,
+        "maximum": 300,
+        "description": "How frequently to check device status (in seconds)"
+      },
+      "debugMode": {
+        "title": "Debug Mode",
+        "type": "boolean",
+        "default": false,
+        "description": "Enable verbose logging for troubleshooting"
       }
     },
     "required": ["apiToken"]
@@ -156,66 +145,41 @@
     "apiToken",
     "unit",
     {
-      "key": "scheduler",
+      "key": "schedulerSettings",
       "type": "section",
+      "title": "Temperature Scheduler",
       "expandable": true,
       "expanded": false,
       "items": [
-        "scheduler.enabled",
+        "schedulerSettings.enabled",
         {
-          "key": "scheduler.schedules",
+          "key": "schedulerSettings.schedules",
           "type": "array",
+          "title": "Device Schedules",
           "buttonText": "Add Device Schedule",
           "items": [
+            "schedulerSettings.schedules[].deviceId",
             {
-              "key": "scheduler.schedules[].deviceId",
-              "type": "select"
-            },
-            {
-              "key": "scheduler.schedules[].scheduleItems",
+              "key": "schedulerSettings.schedules[].scheduleItems",
               "type": "array",
+              "title": "Schedule Items",
               "buttonText": "Add Schedule Item",
               "items": [
-                "scheduler.schedules[].scheduleItems[].dayType",
-                "scheduler.schedules[].scheduleItems[].specificDay",
-                "scheduler.schedules[].scheduleItems[].time",
-                "scheduler.schedules[].scheduleItems[].temperature",
-                "scheduler.schedules[].scheduleItems[].warmHug",
-                "scheduler.schedules[].scheduleItems[].warmHugDuration"
+                "schedulerSettings.schedules[].scheduleItems[].dayType",
+                "schedulerSettings.schedules[].scheduleItems[].specificDay",
+                "schedulerSettings.schedules[].scheduleItems[].time",
+                "schedulerSettings.schedules[].scheduleItems[].temperature",
+                "schedulerSettings.schedules[].scheduleItems[].warmHug",
+                "schedulerSettings.schedules[].scheduleItems[].warmHugDuration"
               ]
             }
           ]
         }
       ]
     },
-    {
-      "key": "advanced",
-      "type": "section",
-      "expandable": true,
-      "expanded": false,
-      "items": [
-        "advanced.debugMode",
-        "advanced.pollingInterval"
-      ]
-    }
+    "pollingInterval",
+    "debugMode"
   ],
-  "customUiSchema": {
-    "ui:accordion": ["scheduler", "advanced"],
-    "scheduler.schedules": {
-      "items": {
-        "ui:accordion": ["scheduleItems"]
-      }
-    },
-    "scheduler.schedules[].scheduleItems[].temperature": {
-      "ui:widget": "updown"
-    },
-    "advanced.pollingInterval": {
-      "ui:widget": "updown"
-    },
-    "scheduler.schedules[].scheduleItems[].warmHugDuration": {
-      "ui:widget": "updown"
-    }
-  },
   "schema:dynamic-device-id": {
     "action": "getDynamicDeviceIds",
     "label": "Select Device"

@@ -59,18 +59,15 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     // Extract configuration options
     this.temperatureUnit = (config.unit as string) || 'C';
     
-    // Safely access advanced options with fallbacks
-    const advanced = config.advanced || {};
+    // Set polling interval with proper validation (use the top-level value now)
+    this.pollingInterval = Math.max(30, Math.min(300, 
+      parseInt(String(config.pollingInterval)) || DEFAULT_POLLING_INTERVAL));
     
-    // Fix: Check both the top-level and advanced debugMode settings
-    this.debugMode = config.debugMode === true || advanced.debugMode === true;
+    // Set debug mode
+    this.debugMode = config.debugMode === true;
     
     // Set up enhanced logger with correct debug mode
     this.log = new EnhancedLogger(logger, this.debugMode);
-    
-    // Fix: Extract polling interval with proper validation
-    this.pollingInterval = Math.max(30, Math.min(300, 
-      parseInt(String(advanced.pollingInterval)) || DEFAULT_POLLING_INTERVAL));
     
     // Validate API token
     if (!config.apiToken) {
@@ -93,7 +90,6 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       `units and ${this.pollingInterval}s polling interval`, 
       LogContext.PLATFORM
     );
-    
     // When this event is fired, homebridge has restored all cached accessories
     this.homebridgeApi.on('didFinishLaunching', () => {
       this.log.info('Homebridge finished launching, starting device discovery', LogContext.PLATFORM);
@@ -118,6 +114,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       this.scheduler.cleanup();
     });
   }
+  
   /**
    * Called when cached accessories are restored at startup
    */
@@ -145,7 +142,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     this.log.info('Starting device discovery...', LogContext.PLATFORM);
     
     try {
-      // Get devices from the API - removed unnecessary connection test
+      // Get devices from the API
       const devices = await this.api.getDevices();
       
       if (!devices || devices.length === 0) {
@@ -160,6 +157,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       
       // Track which accessories are still active
       const activeDeviceIds = new Set<string>();
+      
       // Process each device
       for (const device of devices) {
         if (!device.id) {
@@ -177,7 +175,6 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
         
         // Check if we already have an accessory for this device
         const existingAccessory = this.accessories.find(acc => acc.UUID === uuid);
-        
         if (existingAccessory) {
           // The accessory already exists, just update its context
           this.log.info(
@@ -214,6 +211,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
           this.accessories.push(accessory);
         }
       }
+      
       // Remove accessories that no longer exist
       this.cleanupInactiveAccessories(activeDeviceIds);
       
@@ -258,7 +256,6 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     
     if (accessoriesToRemove.length > 0) {
       this.log.info(`Removing ${accessoriesToRemove.length} inactive accessories`, LogContext.PLATFORM);
-      
       // Clean up each accessory
       for (const accessory of accessoriesToRemove) {
         const deviceId = accessory.context.device?.id;
@@ -288,6 +285,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       );
     }
   }
+  
   /**
    * Get devices for dynamic selection in config UI
    */
@@ -308,14 +306,14 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       return [];
     }
   }
-
+  
   /**
    * Initialize schedules from configuration
    */
   private initializeSchedules(): void {
-    const schedulerConfig = this.config.advanced?.scheduler;
+    const schedulerSettings = this.config.schedulerSettings;
     
-    if (!schedulerConfig || !schedulerConfig.enabled) {
+    if (!schedulerSettings || !schedulerSettings.enabled) {
       this.log.info('Scheduler not enabled in config, skipping initialization', LogContext.PLATFORM);
       return;
     }
@@ -324,8 +322,8 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     
     try {
       // Process each device schedule
-      if (Array.isArray(schedulerConfig.schedules)) {
-        for (const deviceSchedule of schedulerConfig.schedules) {
+      if (Array.isArray(schedulerSettings.schedules)) {
+        for (const deviceSchedule of schedulerSettings.schedules) {
           const deviceId = deviceSchedule.deviceId;
           
           if (!deviceId) {
@@ -339,53 +337,52 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
             events: [],
             enabled: true
           };
-          // Process schedule items
-          if (Array.isArray(deviceSchedule.scheduleItems)) {
-            for (const item of deviceSchedule.scheduleItems) {
-              // Removed enabling check as per requirement #3
-              
-              // Convert day type to day array
-              let days: number[] = [];
-              switch (item.dayType) {
-                case 'everyday':
-                  days = [0, 1, 2, 3, 4, 5, 6]; // All days
-                  break;
-                case 'weekday':
-                  days = [1, 2, 3, 4, 5]; // Monday to Friday
-                  break;
-                case 'weekend':
-                  days = [0, 6]; // Sunday and Saturday
-                  break;
-                case 'specific':
-                  days = [parseInt(item.specificDay, 10)];
-                  break;
-              }
-              
-              // Create event
-              const event: ScheduledEvent = {
-                id: `evt_${Math.random().toString(36).substring(2, 15)}`,
-                enabled: true, // Always enabled by default
-                time: item.time,
-                temperature: item.temperature,
-                days,
-                warmHug: item.warmHug || false,
-                warmHugDuration: item.warmHugDuration || 20
-              };
-              
-              schedule.events.push(event);
+         // Process schedule items
+         if (Array.isArray(deviceSchedule.scheduleItems)) {
+          for (const item of deviceSchedule.scheduleItems) {
+            // Convert day type to day array
+            let days: number[] = [];
+            switch (item.dayType) {
+              case 'everyday':
+                days = [0, 1, 2, 3, 4, 5, 6]; // All days
+                break;
+              case 'weekday':
+                days = [1, 2, 3, 4, 5]; // Monday to Friday
+                break;
+              case 'weekend':
+                days = [0, 6]; // Sunday and Saturday
+                break;
+              case 'specific':
+                // Convert string to number for specific day
+                days = [parseInt(item.specificDay, 10)];
+                break;
             }
+            
+            // Create event
+            const event: ScheduledEvent = {
+              id: `evt_${Math.random().toString(36).substring(2, 15)}`,
+              enabled: true, // Default to enabled
+              time: item.time,
+              temperature: item.temperature,
+              days,
+              warmHug: item.warmHug || false,
+              warmHugDuration: item.warmHugDuration || 20
+            };
+            
+            schedule.events.push(event);
           }
-          
-          // Set the schedule
-          this.scheduler.setDeviceSchedule(schedule);
-          this.log.info(`Initialized schedule for device ${deviceId} with ${schedule.events.length} events`, LogContext.PLATFORM);
         }
+        
+        // Set the schedule
+        this.scheduler.setDeviceSchedule(schedule);
+        this.log.info(`Initialized schedule for device ${deviceId} with ${schedule.events.length} events`, LogContext.PLATFORM);
       }
-    } catch (error) {
-      this.log.error(
-        `Error initializing schedules: ${error instanceof Error ? error.message : String(error)}`,
-        LogContext.PLATFORM
-      );
     }
+  } catch (error) {
+    this.log.error(
+      `Error initializing schedules: ${error instanceof Error ? error.message : String(error)}`,
+      LogContext.PLATFORM
+    );
   }
 }
+} 
