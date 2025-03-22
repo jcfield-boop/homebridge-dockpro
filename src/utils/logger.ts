@@ -29,6 +29,11 @@ export enum LogLevel {
 }
 
 /**
+ * Valid log level string values for configuration
+ */
+export type LogLevelString = 'normal' | 'debug' | 'verbose';
+
+/**
  * Enhanced logger with context support and configurable verbosity
  */
 export class EnhancedLogger {
@@ -38,49 +43,58 @@ export class EnhancedLogger {
    * Create a new enhanced logger
    * 
    * @param logger - Homebridge logger instance
-   * @param logLevelString - Log level as string or legacy boolean options
+   * @param logLevelInput - Log level specification (string, boolean or object)
    * @param timestampEnabled - Whether to include timestamps in log messages
    */
   constructor(
     private readonly logger: Logger,
-    logLevelString: string | boolean | {debugMode?: boolean, verboseLogging?: boolean} = 'normal',
+    logLevelInput: string | boolean | {debugMode?: boolean, verboseLogging?: boolean} = 'normal',
     private readonly timestampEnabled = true
   ) {
-    // Handle different input types for backward compatibility
-    if (typeof logLevelString === 'string') {
-      // New string-based config
-      switch (logLevelString) {
-        case 'verbose':
-          this.logLevel = LogLevel.VERBOSE;
-          break;
-        case 'debug':
-          this.logLevel = LogLevel.DEBUG;
-          break;
-        default:
-          this.logLevel = LogLevel.INFO;
-      }
-    } else if (typeof logLevelString === 'boolean') {
-      // Legacy boolean debug mode
-      this.logLevel = logLevelString ? LogLevel.DEBUG : LogLevel.INFO;
-    } else if (typeof logLevelString === 'object') {
-      // Legacy combined options
-      const config = logLevelString;
-      if (config.verboseLogging) {
-        this.logLevel = LogLevel.VERBOSE;
-      } else if (config.debugMode) {
-        this.logLevel = LogLevel.DEBUG;
-      } else {
-        this.logLevel = LogLevel.INFO;
-      }
-    } else {
-      // Default to INFO level
-      this.logLevel = LogLevel.INFO;
-    }
+    // Convert any string input to a valid LogLevel
+    this.logLevel = this.determineLogLevel(logLevelInput);
     
     // Log the selected level on startup
-    const levelNames = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'VERBOSE'];
+    const levelNames = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'VERBOSE', 'API_DETAIL'];
     this.info(`Logger initialized at ${levelNames[this.logLevel]} level`, LogContext.PLATFORM);
   }
+  
+  /**
+   * Determine LogLevel from various input formats
+   * Handles both string-based config and legacy boolean flags
+   */
+  private determineLogLevel(
+    input: string | boolean | {debugMode?: boolean, verboseLogging?: boolean}
+  ): LogLevel {
+    // Handle string input (both typed and untyped)
+    if (typeof input === 'string') {
+      switch (input.toLowerCase()) {
+        case 'verbose': return LogLevel.VERBOSE;
+        case 'debug': return LogLevel.DEBUG;
+        case 'normal': 
+        default: return LogLevel.INFO;
+      }
+    }
+    
+    // Handle boolean debug flag (legacy)
+    if (typeof input === 'boolean') {
+      return input ? LogLevel.DEBUG : LogLevel.INFO;
+    }
+    
+    // Handle object with boolean flags (legacy)
+    if (input && typeof input === 'object') {
+      if (input.verboseLogging) {
+        return LogLevel.VERBOSE;
+      } else if (input.debugMode) {
+        return LogLevel.DEBUG;
+      }
+    }
+    
+    // Default fallback
+    return LogLevel.INFO;
+  }
+  
+  // Rest of your methods unchanged...
   
   /**
    * Format a message with timestamp and context
@@ -159,39 +173,41 @@ export class EnhancedLogger {
     }
   }
   
-/**
- * Log an API request or response
- */
-public api(method: string, endpoint: string, status?: number, data?: any): void {
-  // Always log completed requests (with status)
-  if (status) {
+  /**
+   * Log an API request or response
+   */
+  public api(method: string, endpoint: string, status?: number, data?: any): void {
+    // Always log completed requests (with status)
+    if (status) {
       const message = `${method} ${endpoint} (Status: ${status})`;
       this.info(message, LogContext.API);
       
       // Only log data at verbose level or higher
       if (data && this.logLevel >= LogLevel.VERBOSE) {
-          try {
-              this.verbose(`${method} ${endpoint} data: ${JSON.stringify(data)}`, LogContext.API);
-          } catch {
-              this.verbose(`${method} ${endpoint} data: [Cannot stringify data]`, LogContext.API);
-          }
+        try {
+          this.verbose(`${method} ${endpoint} data: ${JSON.stringify(data)}`, LogContext.API);
+        } catch {
+          this.verbose(`${method} ${endpoint} data: [Cannot stringify data]`, LogContext.API);
+        }
       }
-  } else {
+    } else {
       // Starting requests logged at info level
       if (this.logLevel >= LogLevel.INFO) {
-          this.info(`${method} ${endpoint}`, LogContext.API);
+        this.info(`${method} ${endpoint}`, LogContext.API);
       }
+    }
   }
-}
+  
   /**
- * Log API wait/throttling information
- * Only logs at API_DETAIL level to reduce noise
- */
-public apiWait(message: string): void {
-  if (this.logLevel >= LogLevel.API_DETAIL) {
+   * Log API wait/throttling information
+   * Only logs at API_DETAIL level to reduce noise
+   */
+  public apiWait(message: string): void {
+    if (this.logLevel >= LogLevel.API_DETAIL) {
       this.debug(`Wait: ${message}`, LogContext.API);
+    }
   }
-}
+  
   /**
    * Log accessory state
    */

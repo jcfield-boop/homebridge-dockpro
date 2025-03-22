@@ -131,19 +131,7 @@
         "default": "normal",
         "enum": ["normal", "debug", "verbose"],
         "enumNames": ["Normal", "Debug", "Verbose"],
-        "description": "Set the level of detail in logs (replaces Debug Mode and Verbose Logging)"
-      },
-      "debugMode": {
-        "title": "Debug Mode (Legacy)",
-        "type": "boolean",
-        "default": false,
-        "description": "DEPRECATED: Use Logging Level instead"
-      },
-      "verboseLogging": {
-        "title": "Verbose Logging (Legacy)",
-        "type": "boolean",
-        "default": false,
-        "description": "DEPRECATED: Use Logging Level instead"
+        "description": "Controls the detail level of plugin logs. Normal for basic operation, Debug for troubleshooting, Verbose for detailed API communication."
       }
     },
     "required": ["apiToken", "unit"]
@@ -204,18 +192,9 @@
         },
         {
           "key": "logLevel",
-          "type": "select"
-        },
-        {
-          "key": "legacyLogging",
-          "type": "section",
-          "title": "Legacy Logging Options",
-          "expandable": true,
-          "expanded": false,
-          "items": [
-            "debugMode",
-            "verboseLogging"
-          ]
+          "type": "select",
+          "title": "Logging Level",
+          "description": "Controls how much detail appears in logs"
         }
       ]
     }

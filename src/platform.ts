@@ -21,7 +21,7 @@ import {
 import { SleepMeApi } from './api/sleepme-api.js';
 import { SleepMeAccessory } from './accessory.js';
 import { SleepMeScheduler, DeviceSchedule, ScheduledEvent } from './scheduler.js';
-import { EnhancedLogger, LogContext } from './utils/logger.js';
+import { EnhancedLogger, LogContext, LogLevelString } from './utils/logger.js';
 import { PLATFORM_NAME, PLUGIN_NAME, DEFAULT_POLLING_INTERVAL } from './settings.js';
 
 /**
@@ -45,11 +45,13 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   // Enhanced logger for better debugging and error reporting
   public readonly log: EnhancedLogger;
   
-  // Configuration options parsed from config.json
-  public readonly logLevel: string;
-  public readonly debugMode: boolean;
-  public readonly pollingInterval: number;
-  public readonly temperatureUnit: string;
+/**
+ * Configuration options parsed from config.json
+ */
+public readonly logLevel: string = 'normal';
+public readonly debugMode: boolean = false;
+public readonly pollingInterval: number;
+public readonly temperatureUnit: string = 'C';
   
   // Map to track active accessory instances for proper cleanup
   private readonly accessoryInstances: Map<string, SleepMeAccessory> = new Map();
@@ -74,25 +76,31 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     this.Service = this.homebridgeApi.hap.Service;
     this.Characteristic = this.homebridgeApi.hap.Characteristic;
     
-    // Parse configuration options with defaults and validation
-    this.temperatureUnit = (config.unit as string) || 'C';
-    
-    // Set polling interval with minimum and maximum bounds for safety
-    this.pollingInterval = Math.max(120, Math.min(900, 
-      parseInt(String(config.pollingInterval)) || DEFAULT_POLLING_INTERVAL));
-   // Set debug and verbose mode flags from configuration
-this.debugMode = config.debugMode === true;
-const verboseLogging = config.verboseLogging === true;
+  // Parse configuration options with defaults and validation
+this.temperatureUnit = (config.unit as string) || 'C';
 
-// Add this line to capture the new property
-this.logLevel = config.logLevel || (verboseLogging ? 'verbose' : (this.debugMode ? 'debug' : 'normal'));
+// Set polling interval with minimum and maximum bounds for safety
+this.pollingInterval = Math.max(120, Math.min(900, 
+  parseInt(String(config.pollingInterval)) || DEFAULT_POLLING_INTERVAL));
+
+    // Handle log level determination
+    if (typeof config.logLevel === 'string') {
+      // Validate and type-cast the log level
+      this.logLevel = ['normal', 'debug', 'verbose'].includes(config.logLevel) 
+        ? (config.logLevel as LogLevelString) 
+        : 'normal';
+    } else {
+      // Legacy configuration - check boolean flags
+      this.debugMode = config.debugMode === true;
+      const verboseLogging = config.verboseLogging === true;
+      
+      // Set log level based on legacy flags
+      this.logLevel = verboseLogging ? 'verbose' : (this.debugMode ? 'debug' : 'normal');
+    }
     
-// Update this section in the constructor
-this.log = new EnhancedLogger(
-  logger,
-  this.logLevel, // Use the logLevel property directly
-  true // Keep timestamps enabled
-);
+    // Initialize the logger with the determined log level
+    this.log = new EnhancedLogger(logger, this.logLevel, true);
+    
     
     // Validate that the API token is present in the configuration
     if (!config.apiToken) {
