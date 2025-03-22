@@ -74,7 +74,7 @@ export class SleepMeApi {
   
   // Device status cache
   private deviceStatusCache: Map<string, DeviceStatusCache> = new Map();
-  private readonly cacheValidityMs = 60000; // Cache valid for 1 minute
+  private readonly cacheValidityMs = 90000; // Cache valid for 90 seconds
   
   // API statistics for monitoring
   private stats: ApiStats = {
@@ -260,34 +260,38 @@ export class SleepMeApi {
     }
     
     try {
-      // Check cache first if not forcing fresh data
-      if (!forceFresh) {
-        const cachedStatus = this.deviceStatusCache.get(deviceId);
-        const now = Date.now();
-        
-        // Use cache if valid and not an optimistic update
-        if (cachedStatus && 
-            !cachedStatus.isOptimistic && 
-            (now - cachedStatus.timestamp < this.cacheValidityMs)) {
-          this.logger.verbose(
-            `Using cached status for device ${deviceId} (${Math.round((now - cachedStatus.timestamp) / 1000)}s old)`, 
-            LogContext.API
-          );
-          
-          // Log the cached status details if verbose logging is enabled
-          if (this.logger.isVerboseEnabled()) {
-            this.logger.verbose(
-              `Cached status: Current=${cachedStatus.status.currentTemperature}°C, ` +
-              `Target=${cachedStatus.status.targetTemperature}°C, ` +
-              `Status=${cachedStatus.status.thermalStatus}, ` +
-              `Power=${cachedStatus.status.powerState}`,
-              LogContext.API
-            );
-          }
-          
-          return cachedStatus.status;
-        }
-      }
+     // Check cache first if not forcing fresh data
+if (!forceFresh) {
+  const cachedStatus = this.deviceStatusCache.get(deviceId);
+  const now = Date.now();
+  
+  // Use cache if valid - even if optimistic but for a shorter time
+  // This reduces API calls after user interactions
+  if (cachedStatus && 
+      (now - cachedStatus.timestamp < (cachedStatus.isOptimistic ? 
+        this.cacheValidityMs/2 : this.cacheValidityMs))) {
+    
+    const ageSeconds = Math.round((now - cachedStatus.timestamp) / 1000);
+    const optimisticFlag = cachedStatus.isOptimistic ? ' (optimistic)' : '';
+    this.logger.verbose(
+      `Using cached status for device ${deviceId} (${ageSeconds}s old${optimisticFlag})`, 
+      LogContext.API
+    );
+    
+    // Log the cached status details if verbose logging is enabled
+    if (this.logger.isVerboseEnabled()) {
+      this.logger.verbose(
+        `Cached status: Current=${cachedStatus.status.currentTemperature}°C, ` +
+        `Target=${cachedStatus.status.targetTemperature}°C, ` +
+        `Status=${cachedStatus.status.thermalStatus}, ` +
+        `Power=${cachedStatus.status.powerState}`,
+        LogContext.API
+      );
+    }
+    
+    return cachedStatus.status;
+  }
+}
       
       this.logger.debug(`Fetching status for device ${deviceId}...`, LogContext.API);
       

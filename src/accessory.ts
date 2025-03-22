@@ -28,6 +28,8 @@ export class SleepMeAccessory {
   private firmwareVersion = 'Unknown';
   private waterLevel = 100; // Default full water level
   private isWaterLow = false;
+  // Add this with the other class property declarations
+private lastTemperatureSetTime = 0;
   
   // Device properties
   private readonly deviceId: string;
@@ -379,7 +381,19 @@ export class SleepMeAccessory {
       this.pendingUpdates = true;
       return;
     }
-    
+      // Skip polling updates if we recently made a user-initiated change
+  // This prevents hammering the API after user interactions
+  if (!isInitialSetup && !this.pendingUpdates) {
+    const timeSinceLastTemp = Date.now() - this.lastTemperatureSetTime;
+    if (timeSinceLastTemp < 30000) { // 30 seconds
+      this.platform.log.debug(
+        `Skipping scheduled status update, recent user interaction ${Math.round(timeSinceLastTemp/1000)}s ago`,
+        LogContext.ACCESSORY
+      );
+      return;
+    }
+  }
+  
     this.isUpdating = true;
     this.lastUpdateTime = Date.now();
     this.pendingUpdates = false;
@@ -658,97 +672,60 @@ export class SleepMeAccessory {
     return temp;
   }
 
-  /**
-   * Handler for TargetTemperature SET
-   * Enhanced to respect device's current power state and reduce API calls
-   */
-  private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<void> {
-    const newTemp = this.validateTemperature(value as number);
-    this.platform.log.verbose(`SET TargetTemperature: ${newTemp}°C`, LogContext.HOMEKIT);
+/**
+ * Handler for TargetTemperature SET
+ * Enhanced to work even when device is off and avoid multiple API calls
+ */
+private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<void> {
+  const newTemp = this.validateTemperature(value as number);
+  this.platform.log.verbose(`SET TargetTemperature: ${newTemp}°C`, LogContext.HOMEKIT);
+  
+  try {
+    // Always update the internal target temperature immediately for responsiveness
+    this.targetTemperature = newTemp;
+    this.lastTemperatureSetTime = Date.now();
     
-    try {
-      // Always update the internal target temperature immediately for responsiveness
-      // This ensures the UI shows the change right away
-      this.targetTemperature = newTemp;
-      
-      // If device is OFF in HomeKit, just store the temperature but don't send to device
-      // The temperature will be applied when the device is turned ON
-      if (this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF) {
-        this.platform.log.info(
-          `Device is currently OFF. Temperature set to ${newTemp}°C will be applied when device is turned on.`,
-          LogContext.ACCESSORY
-        );
-        
-        // Update the UI with the new temperature
-        this.service.updateCharacteristic(
-          this.Characteristic.TargetTemperature,
-          this.targetTemperature
-        );
-        
-        return;
-      }
-      
-      // Update the device temperature since it's on (or should be on)
-      const success = await this.apiClient.setTemperature(this.deviceId, newTemp);
-      
-      if (!success) {
-        throw new Error('Failed to set temperature on the device');
-      }
-      
-      // No need to refresh status after temperature change - the cache will be 
-      // optimistically updated and we'll get a regular status update on the next polling cycle
-      
-      // Update current state based on temperature difference if we have current temperature
-      if (!isNaN(this.currentTemperature)) {
-        let newHeatingState = this.currentHeatingState;
-        
-        if (newTemp > this.currentTemperature + 0.5) {
-          newHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-        } else if (newTemp < this.currentTemperature - 0.5) {
-          newHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
-        }
-        
-        // Only update if changed
-        if (newHeatingState !== this.currentHeatingState) {
-          this.currentHeatingState = newHeatingState;
-          this.service.updateCharacteristic(
-            this.Characteristic.CurrentHeatingCoolingState,
-            this.currentHeatingState
-          );
-          
-          // Log the new heating state
-          let stateString = 'UNKNOWN';
-          switch (this.currentHeatingState) {
-            case this.Characteristic.CurrentHeatingCoolingState.OFF:
-              stateString = 'OFF';
-              break;
-            case this.Characteristic.CurrentHeatingCoolingState.HEAT:
-              stateString = 'HEAT';
-              break;
-            case this.Characteristic.CurrentHeatingCoolingState.COOL:
-              stateString = 'COOL';
-              break;
-          }
-          
-          this.platform.log.verbose(
-            `Current heating state updated to ${stateString} based on temperature difference`,
-            LogContext.ACCESSORY
-          );
-        }
-      }
-    } catch (error) {
-      this.platform.log.error(
-        `Failed to set target temperature: ${error instanceof Error ? error.message : String(error)}`,
+    // If device is OFF in HomeKit, just store the temperature but don't send to device
+    // The temperature will be applied when the device is turned ON
+    if (this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF) {
+      this.platform.log.info(
+        `Device is currently OFF. Temperature set to ${newTemp}°C will be applied when device is turned on.`,
         LogContext.ACCESSORY
       );
       
-      // In case of error, make sure UI still shows the correct temperature
+      // Update the UI with the new temperature
       this.service.updateCharacteristic(
         this.Characteristic.TargetTemperature,
         this.targetTemperature
       );
+      
+      return;
     }
+    
+    // Update the device temperature since it's on (or should be on)
+    const success = await this.apiClient.setTemperature(this.deviceId, newTemp);
+    
+    if (!success) {
+      throw new Error('Failed to set temperature on the device');
+    }
+    
+    // Update current state based on temperature difference if we have current temperature
+    if (!isNaN(this.currentTemperature)) {
+      this.updateHeatingState();
+    }
+  } catch (error) {
+    this.platform.log.error(
+      `Failed to set target temperature: ${error instanceof Error ? error.message : String(error)}`,
+      LogContext.ACCESSORY
+    );
+    
+    // In case of error, make sure UI still shows the correct temperature
+    this.service.updateCharacteristic(
+      this.Characteristic.TargetTemperature,
+      this.targetTemperature
+    );
   }
+}
   private async handleCurrentHeatingStateGet(): Promise<CharacteristicValue> {
     // Create state name string for logging
     let stateString = 'UNKNOWN';
@@ -767,7 +744,52 @@ export class SleepMeAccessory {
     this.platform.log.debug(`GET CurrentHeatingCoolingState: ${stateString}`, LogContext.HOMEKIT);
     return this.currentHeatingState;
   }
+
 /**
+ * Helper method to update heating state based on temperature difference
+ */
+private updateHeatingState(): void {
+  // Only update if we have current temperature data
+  if (isNaN(this.currentTemperature)) return;
+  
+  let newHeatingState = this.currentHeatingState;
+  
+  if (this.targetTemperature > this.currentTemperature + 0.5) {
+    newHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+  } else if (this.targetTemperature < this.currentTemperature - 0.5) {
+    newHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+  }
+  
+  // Only update if changed
+  if (newHeatingState !== this.currentHeatingState) {
+    this.currentHeatingState = newHeatingState;
+    this.service.updateCharacteristic(
+      this.Characteristic.CurrentHeatingCoolingState,
+      this.currentHeatingState
+    );
+    
+    // Log the new heating state
+    let stateString = 'UNKNOWN';
+    switch (this.currentHeatingState) {
+      case this.Characteristic.CurrentHeatingCoolingState.OFF:
+        stateString = 'OFF';
+        break;
+      case this.Characteristic.CurrentHeatingCoolingState.HEAT:
+        stateString = 'HEAT';
+        break;
+      case this.Characteristic.CurrentHeatingCoolingState.COOL:
+        stateString = 'COOL';
+        break;
+    }
+    
+    this.platform.log.verbose(
+      `Current heating state updated to ${stateString} based on temperature difference`,
+      LogContext.ACCESSORY
+    );
+  }
+}
+
+  /**
    * Handler for TargetHeatingCoolingState GET
    */
 private async handleTargetHeatingStateGet(): Promise<CharacteristicValue> {
@@ -788,7 +810,7 @@ private async handleTargetHeatingStateGet(): Promise<CharacteristicValue> {
 
 /**
  * Handler for TargetHeatingCoolingState SET
- * Enhanced to ensure proper device state transitions
+ * Enhanced to use stored temperature when turning on
  */
 private async handleTargetHeatingStateSet(value: CharacteristicValue): Promise<void> {
   const newState = value as number;
@@ -827,27 +849,27 @@ private async handleTargetHeatingStateSet(value: CharacteristicValue): Promise<v
         this.platform.log.verbose(`Device ${this.deviceId} turned OFF successfully`, LogContext.ACCESSORY);
       }
     } else if (newState === this.Characteristic.TargetHeatingCoolingState.AUTO) {
+      // Check if we just recently set the temperature (within the last 2 seconds)
+      // This helps avoid redundant API calls when HomeKit sends both temperature and state changes
+      const now = Date.now();
+      if (now - this.lastTemperatureSetTime < 2000) {
+        this.platform.log.verbose(
+          `Skipping redundant turnOn call as temperature was just set`,
+          LogContext.ACCESSORY
+        );
+        
+        // Still need to update UI state
+        this.updateHeatingState();
+        return;
+      }
+      
       // Turn on the device with current target temperature
       const temperature = isNaN(this.targetTemperature) ? 21 : this.targetTemperature;
       success = await this.apiClient.turnDeviceOn(this.deviceId, temperature);
       
       if (success) {
         // Update current state based on temperature difference
-        let newHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT; // Default to heating
-        
-        if (!isNaN(this.currentTemperature)) {
-          if (temperature > this.currentTemperature + 0.5) {
-            newHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-          } else if (temperature < this.currentTemperature - 0.5) {
-            newHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
-          }
-        }
-        
-        this.currentHeatingState = newHeatingState;
-        this.service.updateCharacteristic(
-          this.Characteristic.CurrentHeatingCoolingState,
-          this.currentHeatingState
-        );
+        this.updateHeatingState();
         
         this.platform.log.verbose(
           `Device ${this.deviceId} turned ON successfully to ${temperature}°C`,
@@ -859,8 +881,6 @@ private async handleTargetHeatingStateSet(value: CharacteristicValue): Promise<v
     if (!success) {
       throw new Error(`Failed to change device state to ${stateString}`);
     }
-    
-    // No need for immediate status refresh - we'll get an update on the next polling cycle
   } catch (error) {
     this.platform.log.error(
       `Failed to set target heating state: ${error instanceof Error ? error.message : String(error)}`,
@@ -874,7 +894,6 @@ private async handleTargetHeatingStateSet(value: CharacteristicValue): Promise<v
     );
   }
 }
-
 /**
  * Handle scheduled events from the scheduler
  * @param eventData Data about the scheduled event
