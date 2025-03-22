@@ -31,7 +31,7 @@ export enum LogLevel {
 /**
  * Valid log level string values for configuration
  */
-export type LogLevelString = 'normal' | 'debug' | 'verbose';
+export type LogLevelString = 'normal' | 'debug' | 'verbose' | 'api_detail';
 
 /**
  * Enhanced logger with context support and configurable verbosity

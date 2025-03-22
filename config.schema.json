@@ -130,8 +130,8 @@
         "title": "Logging Level",
         "type": "string",
         "default": "normal",
-        "enum": ["normal", "debug", "verbose"],
-        "enumNames": ["Normal", "Debug", "Verbose"],
+  "enum": ["normal", "debug", "verbose", "api_detail"],
+"enumNames": ["Normal", "Debug", "Verbose", "API Detail"],
         "description": "Controls the detail level of plugin logs. Normal provides basic operation info, Debug adds detailed state information useful for troubleshooting, and Verbose includes all API communication details."
       }
     },
