@@ -749,10 +749,6 @@ export class SleepMeAccessory {
       );
     }
   }
-
-  /**
-   * Handler for CurrentHeatingCoolingState GET
-   */
   private async handleCurrentHeatingStateGet(): Promise<CharacteristicValue> {
     // Create state name string for logging
     let stateString = 'UNKNOWN';
@@ -771,3 +767,214 @@ export class SleepMeAccessory {
     this.platform.log.debug(`GET CurrentHeatingCoolingState: ${stateString}`, LogContext.HOMEKIT);
     return this.currentHeatingState;
   }
+/**
+   * Handler for TargetHeatingCoolingState GET
+   */
+private async handleTargetHeatingStateGet(): Promise<CharacteristicValue> {
+  // Create state name string for logging
+  let stateString = 'UNKNOWN';
+  switch (this.targetHeatingState) {
+    case this.Characteristic.TargetHeatingCoolingState.OFF:
+      stateString = 'OFF';
+      break;
+    case this.Characteristic.TargetHeatingCoolingState.AUTO:
+      stateString = 'AUTO';
+      break;
+  }
+  
+  this.platform.log.debug(`GET TargetHeatingCoolingState: ${stateString}`, LogContext.HOMEKIT);
+  return this.targetHeatingState;
+}
+
+/**
+ * Handler for TargetHeatingCoolingState SET
+ * Enhanced to ensure proper device state transitions
+ */
+private async handleTargetHeatingStateSet(value: CharacteristicValue): Promise<void> {
+  const newState = value as number;
+  let stateString = 'UNKNOWN';
+  
+  switch (newState) {
+    case this.Characteristic.TargetHeatingCoolingState.OFF:
+      stateString = 'OFF';
+      break;
+    case this.Characteristic.TargetHeatingCoolingState.AUTO:
+      stateString = 'AUTO';
+      break;
+  }
+  
+  this.platform.log.info(`SET TargetHeatingCoolingState: ${stateString}`, LogContext.HOMEKIT);
+  
+  try {
+    // Update internal state first for responsiveness
+    this.targetHeatingState = newState;
+    
+    // Power on or off based on the new state
+    let success = false;
+    
+    if (newState === this.Characteristic.TargetHeatingCoolingState.OFF) {
+      // Turn off the device
+      success = await this.apiClient.turnDeviceOff(this.deviceId);
+      
+      if (success) {
+        // Update current state to reflect the device is now off
+        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.OFF;
+        this.service.updateCharacteristic(
+          this.Characteristic.CurrentHeatingCoolingState,
+          this.currentHeatingState
+        );
+        
+        this.platform.log.verbose(`Device ${this.deviceId} turned OFF successfully`, LogContext.ACCESSORY);
+      }
+    } else if (newState === this.Characteristic.TargetHeatingCoolingState.AUTO) {
+      // Turn on the device with current target temperature
+      const temperature = isNaN(this.targetTemperature) ? 21 : this.targetTemperature;
+      success = await this.apiClient.turnDeviceOn(this.deviceId, temperature);
+      
+      if (success) {
+        // Update current state based on temperature difference
+        let newHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT; // Default to heating
+        
+        if (!isNaN(this.currentTemperature)) {
+          if (temperature > this.currentTemperature + 0.5) {
+            newHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+          } else if (temperature < this.currentTemperature - 0.5) {
+            newHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+          }
+        }
+        
+        this.currentHeatingState = newHeatingState;
+        this.service.updateCharacteristic(
+          this.Characteristic.CurrentHeatingCoolingState,
+          this.currentHeatingState
+        );
+        
+        this.platform.log.verbose(
+          `Device ${this.deviceId} turned ON successfully to ${temperature}°C`,
+          LogContext.ACCESSORY
+        );
+      }
+    }
+    
+    if (!success) {
+      throw new Error(`Failed to change device state to ${stateString}`);
+    }
+    
+    // No need for immediate status refresh - we'll get an update on the next polling cycle
+  } catch (error) {
+    this.platform.log.error(
+      `Failed to set target heating state: ${error instanceof Error ? error.message : String(error)}`,
+      LogContext.ACCESSORY
+    );
+    
+    // Ensure UI shows correct state in case of error
+    this.service.updateCharacteristic(
+      this.Characteristic.TargetHeatingCoolingState,
+      this.targetHeatingState
+    );
+  }
+}
+
+/**
+ * Handle scheduled events from the scheduler
+ * @param eventData Data about the scheduled event
+ */
+public handleScheduledEvent(eventData: { deviceId: string, temperature: number, state: string }): void {
+  if (eventData.deviceId !== this.deviceId) {
+    return; // Not for this device
+  }
+  
+  this.platform.log.info(
+    `Handling scheduled event: Temperature=${eventData.temperature}°C, State=${eventData.state}`,
+    LogContext.ACCESSORY
+  );
+  
+  // Update target temperature and state in HomeKit
+  if (!isNaN(eventData.temperature) && 
+      eventData.temperature >= MIN_TEMPERATURE_C && 
+      eventData.temperature <= MAX_TEMPERATURE_C) {
+    
+    this.targetTemperature = eventData.temperature;
+    this.service.updateCharacteristic(
+      this.Characteristic.TargetTemperature,
+      this.targetTemperature
+    );
+  }
+  
+  // Update target state based on the scheduled event state
+  if (eventData.state === 'auto') {
+    // If scheduled event is "auto", make sure HomeKit shows AUTO
+    this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.AUTO;
+    this.service.updateCharacteristic(
+      this.Characteristic.TargetHeatingCoolingState,
+      this.targetHeatingState
+    );
+    
+    // Also update current state based on temperature difference
+    if (!isNaN(this.currentTemperature) && !isNaN(this.targetTemperature)) {
+      let newHeatingState = this.currentHeatingState;
+      
+      if (this.targetTemperature > this.currentTemperature + 0.5) {
+        newHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+      } else if (this.targetTemperature < this.currentTemperature - 0.5) {
+        newHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+      }
+      
+      if (newHeatingState !== this.currentHeatingState) {
+        this.currentHeatingState = newHeatingState;
+        this.service.updateCharacteristic(
+          this.Characteristic.CurrentHeatingCoolingState,
+          this.currentHeatingState
+        );
+      }
+    }
+  } else if (eventData.state === 'off') {
+    // If scheduled event is "off", make sure HomeKit shows OFF
+    this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.OFF;
+    this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.OFF;
+    
+    this.service.updateCharacteristic(
+      this.Characteristic.TargetHeatingCoolingState,
+      this.targetHeatingState
+    );
+    
+    this.service.updateCharacteristic(
+      this.Characteristic.CurrentHeatingCoolingState,
+      this.currentHeatingState
+    );
+  }
+  
+  // No need to issue API calls - the scheduler has already done this
+  this.platform.log.verbose(
+    `HomeKit UI updated to match scheduled event: Target=${this.targetTemperature}°C`,
+    LogContext.ACCESSORY
+  );
+}
+
+/**
+ * Validate and clamp temperature to allowed range
+ * @param temperature Temperature to validate
+ * @returns Validated temperature value
+ */
+private validateTemperature(temperature: number): number {
+  // First round to nearest 0.5°C increment
+  let roundedTemp = Math.round(temperature * 2) / 2;
+  
+  // Then clamp to allowed range
+  if (roundedTemp < MIN_TEMPERATURE_C) {
+    this.platform.log.warn(
+      `Temperature ${temperature}°C below minimum of ${MIN_TEMPERATURE_C}°C, clamping to minimum`,
+      LogContext.ACCESSORY
+    );
+    roundedTemp = MIN_TEMPERATURE_C;
+  } else if (roundedTemp > MAX_TEMPERATURE_C) {
+    this.platform.log.warn(
+      `Temperature ${temperature}°C above maximum of ${MAX_TEMPERATURE_C}°C, clamping to maximum`,
+      LogContext.ACCESSORY
+    );
+    roundedTemp = MAX_TEMPERATURE_C;
+  }
+  
+  return roundedTemp;
+}
+}
