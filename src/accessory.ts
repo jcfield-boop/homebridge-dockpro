@@ -17,7 +17,7 @@ import { MIN_TEMPERATURE_C, MAX_TEMPERATURE_C, TEMPERATURE_STEP } from './settin
 export class SleepMeAccessory {
   // HomeKit services
   private service: Service;
-  private informationService: Service;
+  private informationService!: Service;
   private waterLevelService?: Service;
   
   // Device state - initialize with NaN to indicate uninitialized state
@@ -65,14 +65,46 @@ private lastTemperatureSetTime = 0;
     
     this.platform.log.verbose(`Creating accessory for device ${this.deviceId} (${this.displayName})`, LogContext.ACCESSORY);
     
-    // Set accessory information with default values
-    // These will be properly updated when we get device status
-    this.informationService = this.accessory.getService(this.platform.Service.AccessoryInformation)!
-      .setCharacteristic(this.Characteristic.Manufacturer, 'Sleepme Inc.')
-      .setCharacteristic(this.Characteristic.Model, this.deviceModel)
-      .setCharacteristic(this.Characteristic.SerialNumber, this.deviceId)
-      .setCharacteristic(this.Characteristic.FirmwareRevision, this.firmwareVersion);
+ // Set accessory information with default values
+ 
+// Store references to Characteristic for convenience
+this.Characteristic = this.platform.Characteristic;
   
+// Get device ID from accessory context
+this.deviceId = this.accessory.context.device?.id || '';
+this.displayName = this.accessory.displayName;
+  
+if (!this.deviceId) {
+  this.platform.log.error(`Accessory missing device ID: ${this.displayName}`, LogContext.ACCESSORY);
+  throw new Error(`Accessory missing device ID: ${this.displayName}`);
+}
+  
+this.platform.log.verbose(`Creating accessory for device ${this.deviceId} (${this.displayName})`, LogContext.ACCESSORY);
+  
+// IMPORTANT: Handle the information service initialization safely
+const infoService = this.accessory.getService(this.platform.Service.AccessoryInformation);
+if (infoService) {
+  // Use existing service
+  this.informationService = infoService;
+  this.platform.log.debug(`Using existing AccessoryInformation service for ${this.deviceId}`, LogContext.ACCESSORY);
+} else {
+  // Create new service if it doesn't exist
+  this.platform.log.info(`Creating new AccessoryInformation service for ${this.deviceId}`, LogContext.ACCESSORY);
+  this.informationService = this.accessory.addService(this.platform.Service.AccessoryInformation);
+}
+
+// Now that this.informationService is definitely set, we can update characteristics
+this.informationService
+  .setCharacteristic(this.Characteristic.Manufacturer, 'Sleepme Inc.')
+  .setCharacteristic(this.Characteristic.Model, this.deviceModel)
+  .setCharacteristic(this.Characteristic.SerialNumber, this.deviceId)
+  .setCharacteristic(this.Characteristic.FirmwareRevision, this.firmwareVersion);
+
+// Log the initial firmware version
+this.platform.log.debug(
+  `Initial firmware version set to ${this.firmwareVersion} for device ${this.deviceId}`,
+  LogContext.ACCESSORY
+);
     // Get or create the thermostat service
     this.service = this.accessory.getService(this.platform.Service.Thermostat) || 
       this.accessory.addService(this.platform.Service.Thermostat, this.displayName);
@@ -441,19 +473,49 @@ private lastTemperatureSetTime = 0;
         }
       }
       
-      // Update firmware version if available
-      if (status.firmwareVersion && status.firmwareVersion !== this.firmwareVersion) {
-        this.firmwareVersion = status.firmwareVersion;
-        // Explicitly update the firmware revision characteristic
-        this.informationService.updateCharacteristic(
-          this.Characteristic.FirmwareRevision,
-          this.firmwareVersion
-        );
-        this.platform.log.debug(
-          `Updated firmware version to ${this.firmwareVersion}`,
-          LogContext.ACCESSORY
-        );
-      }
+   // Enhanced firmware version handling with additional logging
+if (status.firmwareVersion !== undefined) {
+  const newFirmwareVersion = String(status.firmwareVersion);
+  
+  // Log whether the firmware version has changed
+  if (newFirmwareVersion !== this.firmwareVersion) {
+    this.platform.log.info(
+      `Updating firmware version from "${this.firmwareVersion}" to "${newFirmwareVersion}" for device ${this.deviceId}`,
+      LogContext.ACCESSORY
+    );
+    
+    // Update our stored value
+    this.firmwareVersion = newFirmwareVersion;
+    
+    // Explicitly update the HomeKit characteristic
+    try {
+      this.informationService.updateCharacteristic(
+        this.Characteristic.FirmwareRevision,
+        this.firmwareVersion
+      );
+      
+      this.platform.log.debug(
+        `Successfully updated HomeKit firmware characteristic to ${this.firmwareVersion}`,
+        LogContext.ACCESSORY
+      );
+    } catch (error) {
+      this.platform.log.error(
+        `Failed to update firmware characteristic: ${error instanceof Error ? error.message : String(error)}`,
+        LogContext.ACCESSORY
+      );
+    }
+  } else {
+    this.platform.log.verbose(
+      `Firmware version unchanged at ${this.firmwareVersion}`,
+      LogContext.ACCESSORY
+    );
+  }
+} else {
+  this.platform.log.verbose(
+    `No firmware version in status for device ${this.deviceId}`,
+    LogContext.ACCESSORY
+  );
+}
       
       // Always update current temperature regardless of device state
       // This ensures temperature is displayed even when device is off

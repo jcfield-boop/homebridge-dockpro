@@ -342,14 +342,31 @@ if (!forceFresh) {
         rawResponse
       };
       
-      // Extract firmware version if available
-      const firmwareVersion = this.extractNestedValue(response, 'about.firmware_version') || 
-                              this.extractNestedValue(response, 'firmware_version');
-      
-      if (firmwareVersion) {
-        status.firmwareVersion = String(firmwareVersion);
-      }
-      
+// Extract firmware version with enhanced debugging
+let firmwareVersion = null;
+const paths = ['about.firmware_version', 'firmware_version', 'control.firmware_version', 'status.firmware_version'];
+
+// Try all possible paths for firmware version
+for (const path of paths) {
+  const value = this.extractNestedValue(response, path);
+  if (value) {
+    firmwareVersion = String(value);
+    this.logger.verbose(`Found firmware version at path: ${path} = ${firmwareVersion}`, LogContext.API);
+    break;
+  }
+}
+
+// Add firmware version if found
+if (firmwareVersion) {
+  status.firmwareVersion = firmwareVersion;
+  this.logger.info(`Device ${deviceId} firmware version: ${firmwareVersion}`, LogContext.API);
+} else {
+  this.logger.verbose(`No firmware version found in response for device ${deviceId}`, LogContext.API);
+}
+   // For API detail logging, log the full raw response
+if (this.logger.isApiDetailEnabled()) {
+  this.logger.apiDetail(`Raw device status response: ${JSON.stringify(rawResponse)}`);
+}   
       // Extract connection status if available
       const connected = this.extractNestedValue(response, 'status.is_connected') ||
                         this.extractNestedValue(response, 'is_connected');
