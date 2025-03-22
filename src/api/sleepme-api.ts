@@ -121,6 +121,7 @@ export class SleepMeApi {
     setInterval(() => this.cleanupCache(), 300000); // Clean up cache every 5 minutes
     
     this.logger.info('SleepMe API client initialized', LogContext.API);
+    this.logger.verbose(`API client configured with API token: ${apiToken.substring(0, 4)}...${apiToken.substring(apiToken.length - 4)}`, LogContext.API);
   }
   
   /**
@@ -164,89 +165,88 @@ export class SleepMeApi {
       this.logger.debug(`Cleaned up ${expiredCount} expired cache entries`, LogContext.API);
     }
   }
+  
   /**
- * Get devices from the SleepMe API
- * @returns Array of devices or empty array if error
- */
-public async getDevices(): Promise<Device[]> {
-  try {
-    this.logger.debug('Fetching devices...', LogContext.API);
-    
-    const response = await this.makeRequest<Device[] | { devices: Device[] }>({
-      method: 'GET',
-      url: '/devices',
-      priority: RequestPriority.HIGH, // Device discovery is a high priority operation
-      operationType: 'getDevices'
-    });
-    
-    // Handle different API response formats
-    let devices: Device[];
-    if (Array.isArray(response)) {
-      devices = response;
-    } else if (response && typeof response === 'object' && 'devices' in response) {
-      devices = response.devices;
-    } else {
-      // Log the actual response for debugging
-      this.logger.error(`Unexpected API response format: ${JSON.stringify(response)}`, LogContext.API);
+   * Get devices from the SleepMe API
+   * @returns Array of devices or empty array if error
+   */
+  public async getDevices(): Promise<Device[]> {
+    try {
+      this.logger.debug('Fetching devices...', LogContext.API);
+      
+      const response = await this.makeRequest<Device[] | { devices: Device[] }>({
+        method: 'GET',
+        url: '/devices',
+        priority: RequestPriority.HIGH, // Device discovery is a high priority operation
+        operationType: 'getDevices'
+      });
+      
+      // Handle different API response formats
+      let devices: Device[];
+      if (Array.isArray(response)) {
+        devices = response;
+      } else if (response && typeof response === 'object' && 'devices' in response) {
+        devices = response.devices;
+      } else {
+        this.logger.error('Unexpected API response format for devices', LogContext.API);
+        return [];
+      }
+      
+      // Verbose log the complete device list
+      if (this.logger.isVerboseEnabled()) {
+        this.logger.verbose(`Retrieved ${devices.length} devices from API`, LogContext.API);
+        devices.forEach((device, index) => {
+          this.logger.verbose(`Device ${index + 1}: ID=${device.id}, Name=${device.name}`, LogContext.API);
+        });
+      }
+      
+      // Validate and filter devices
+      const validDevices = devices.filter(device => {
+        if (!device.id) {
+          this.logger.warn(`Found device without ID: ${JSON.stringify(device)}`, LogContext.API);
+          return false;
+        }
+        return true;
+      });
+      
+      this.logger.info(`Found ${validDevices.length} devices`, LogContext.API);
+      return validDevices;
+    } catch (error) {
+      this.handleApiError('getDevices', error);
       return [];
     }
-    
-    // Validate and filter devices
-    const validDevices = devices.filter(device => {
-      if (!device.id) {
-        this.logger.warn(`Found device without ID: ${JSON.stringify(device)}`, LogContext.API);
-        return false;
-      }
-      return true;
-    });
-    
-    // Log the device count and IDs for better debugging
-    this.logger.info(`Found ${validDevices.length} devices: ${validDevices.map(d => d.id).join(', ')}`, LogContext.API);
-    return validDevices;
-  } catch (error) {
-    // Enhanced error handling
-    if (axios.isAxiosError(error)) {
-      this.logger.error(
-        `API error in getDevices: ${error.message} (Status: ${error.response?.status || 'unknown'})`,
-        LogContext.API
-      );
-      
-      if (error.response?.data) {
-        this.logger.debug(`Error response data: ${JSON.stringify(error.response.data)}`, LogContext.API);
-      }
-    } else {
-      this.logger.error(`Error in getDevices: ${error instanceof Error ? error.message : String(error)}`, LogContext.API);
-    }
-    return [];
   }
-}
- 
+
   /**
- * Get status for multiple devices in a batched request
- * @param deviceIds Array of device identifiers
- * @param forceFresh Whether to force fresh status updates
- * @returns Map of device IDs to device statuses
- */
-public async getMultipleDeviceStatuses(
-  deviceIds: string[], 
-  forceFresh = false
-): Promise<Map<string, DeviceStatus | null>> {
-  const results = new Map<string, DeviceStatus | null>();
-  
-  // Use a staggered approach to avoid rate limiting
-  for (let i = 0; i < deviceIds.length; i++) {
-      const deviceId = deviceIds[i];
-      const status = await this.getDeviceStatus(deviceId, forceFresh);
-      results.set(deviceId, status);
-      
-      // Add a small delay between requests to avoid API rate limiting
-      if (i < deviceIds.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+   * Get status for multiple devices in a batched request
+   * @param deviceIds Array of device identifiers
+   * @param forceFresh Whether to force fresh status updates
+   * @returns Map of device IDs to device statuses
+   */
+  public async getMultipleDeviceStatuses(
+    deviceIds: string[], 
+    forceFresh = false
+  ): Promise<Map<string, DeviceStatus | null>> {
+    const results = new Map<string, DeviceStatus | null>();
+    
+    this.logger.debug(`Getting status for ${deviceIds.length} devices${forceFresh ? ' (force fresh)' : ''}`, LogContext.API);
+    
+    // Use a staggered approach to avoid rate limiting
+    for (let i = 0; i < deviceIds.length; i++) {
+        const deviceId = deviceIds[i];
+        const status = await this.getDeviceStatus(deviceId, forceFresh);
+        results.set(deviceId, status);
+        
+        // Add a small delay between requests to avoid API rate limiting
+        if (i < deviceIds.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    }
+    
+    this.logger.verbose(`Retrieved status for ${deviceIds.length} devices`, LogContext.API);
+    return results;
   }
-  
-  return results;
-}
+
   /**
    * Get status for a specific device with intelligent caching
    * @param deviceId Device identifier
@@ -269,7 +269,22 @@ public async getMultipleDeviceStatuses(
         if (cachedStatus && 
             !cachedStatus.isOptimistic && 
             (now - cachedStatus.timestamp < this.cacheValidityMs)) {
-          this.logger.debug(`Using cached status for device ${deviceId} (${Math.round((now - cachedStatus.timestamp) / 1000)}s old)`, LogContext.API);
+          this.logger.verbose(
+            `Using cached status for device ${deviceId} (${Math.round((now - cachedStatus.timestamp) / 1000)}s old)`, 
+            LogContext.API
+          );
+          
+          // Log the cached status details if verbose logging is enabled
+          if (this.logger.isVerboseEnabled()) {
+            this.logger.verbose(
+              `Cached status: Current=${cachedStatus.status.currentTemperature}°C, ` +
+              `Target=${cachedStatus.status.targetTemperature}°C, ` +
+              `Status=${cachedStatus.status.thermalStatus}, ` +
+              `Power=${cachedStatus.status.powerState}`,
+              LogContext.API
+            );
+          }
+          
           return cachedStatus.status;
         }
       }
@@ -291,6 +306,11 @@ public async getMultipleDeviceStatuses(
       
       // Save the raw response for debugging
       const rawResponse = { ...response };
+      
+      // For API detail logging, log the full raw response
+      if (this.logger.isApiDetailEnabled()) {
+        this.logger.apiDetail(`Raw device status response: ${JSON.stringify(rawResponse)}`);
+      }
       
       // Parse the device status from the response
       const status: DeviceStatus = {
@@ -349,10 +369,13 @@ public async getMultipleDeviceStatuses(
         status.isWaterLow = Boolean(isWaterLow);
       }
       
-      this.logger.debug(
+      // Verbose log the parsed status information
+      this.logger.verbose(
         `Device status: Temp=${status.currentTemperature}°C, ` +
         `Target=${status.targetTemperature}°C, ` +
-        `Status=${status.thermalStatus}`,
+        `Status=${status.thermalStatus}, ` +
+        `Power=${status.powerState}` +
+        (status.waterLevel !== undefined ? `, Water=${status.waterLevel}%` : ''),
         LogContext.API
       );
       
@@ -411,6 +434,9 @@ public async getMultipleDeviceStatuses(
         thermal_control_status: 'active'
       };
       
+      // Log the request payload in verbose mode
+      this.logger.verbose(`Turn ON payload: ${JSON.stringify(payload)}`, LogContext.API);
+      
       const success = await this.updateDeviceSettings(deviceId, payload);
       
       if (success) {
@@ -420,6 +446,10 @@ public async getMultipleDeviceStatuses(
           targetTemperature: targetTemp,
           thermalStatus: ThermalStatus.ACTIVE
         });
+        
+        this.logger.verbose(`Device ${deviceId} turned ON successfully`, LogContext.API);
+      } else {
+        this.logger.error(`Failed to turn device ${deviceId} ON`, LogContext.API);
       }
       
       return success;
@@ -443,6 +473,8 @@ public async getMultipleDeviceStatuses(
         thermal_control_status: 'standby'
       };
       
+      this.logger.verbose(`Turn OFF payload: ${JSON.stringify(payload)}`, LogContext.API);
+      
       const success = await this.updateDeviceSettings(deviceId, payload);
       
       if (success) {
@@ -451,6 +483,10 @@ public async getMultipleDeviceStatuses(
           powerState: PowerState.OFF,
           thermalStatus: ThermalStatus.STANDBY
         });
+        
+        this.logger.verbose(`Device ${deviceId} turned OFF successfully`, LogContext.API);
+      } else {
+        this.logger.error(`Failed to turn device ${deviceId} OFF`, LogContext.API);
       }
       
       return success;
@@ -478,6 +514,8 @@ public async getMultipleDeviceStatuses(
         set_temperature_f: tempF
       };
       
+      this.logger.verbose(`Set temperature payload: ${JSON.stringify(payload)}`, LogContext.API);
+      
       const success = await this.updateDeviceSettings(deviceId, payload);
       
       if (success) {
@@ -485,6 +523,10 @@ public async getMultipleDeviceStatuses(
         this.updateCacheOptimistically(deviceId, {
           targetTemperature: temperature
         });
+        
+        this.logger.verbose(`Device ${deviceId} temperature set successfully to ${temperature}°C`, LogContext.API);
+      } else {
+        this.logger.error(`Failed to set device ${deviceId} temperature to ${temperature}°C`, LogContext.API);
       }
       
       return success;
@@ -530,6 +572,11 @@ public async getMultipleDeviceStatuses(
       if (response) {
         this.logger.info(`Successfully updated device ${deviceId} settings`, LogContext.API);
         
+        // Log full response in verbose mode
+        if (this.logger.isVerboseEnabled()) {
+          this.logger.verbose(`Update response: ${JSON.stringify(response)}`, LogContext.API);
+        }
+        
         // Reset consecutive errors on success
         this.consecutiveErrors = 0;
         
@@ -566,7 +613,7 @@ public async getMultipleDeviceStatuses(
         isOptimistic: true
       });
       
-      this.logger.debug(
+      this.logger.verbose(
         `Optimistically updated cache for device ${deviceId}: ` +
         `Power=${updatedStatus.powerState}, ` +
         `Target=${updatedStatus.targetTemperature}°C, ` +
@@ -618,8 +665,8 @@ public async getMultipleDeviceStatuses(
                 const waitTime = MIN_REQUEST_INTERVAL - timeSinceLastRequest;
                 
                 // Only log this at verbose level to reduce noise - use the new method
-                if (this.logger.getLogLevel() >= LogLevel.VERBOSE) {
-                    this.logger.apiWait(`${waitTime}ms between requests`);
+                if (this.logger.isVerboseEnabled()) {
+                    this.logger.verbose(`Waiting ${waitTime}ms between requests to prevent rate limiting`, LogContext.API);
                 }
                 
                 // Wait for minimum interval
@@ -637,7 +684,77 @@ public async getMultipleDeviceStatuses(
             // Mark the request as executing
             request.executing = true;
             
-            // Rest of your existing code for executing the request...
+            try {
+                // Update rate limiting counters
+                this.requestsThisMinute++;
+                this.lastRequestTime = Date.now();
+                
+                // Add auth token to request
+                request.config.headers = {
+                    ...(request.config.headers || {}),
+                    Authorization: `Bearer ${this.apiToken}`
+                };
+                
+                this.logger.verbose(
+                    `Executing request ${request.id}: ${request.method} ${request.url}`,
+                    LogContext.API
+                );
+                
+                const startTime = Date.now();
+                
+                // Execute the request
+                this.stats.totalRequests++;
+                const response = await axios(request.config);
+                this.stats.successfulRequests++;
+                this.stats.lastRequest = new Date();
+                
+                // Track response time
+                const responseTime = Date.now() - startTime;
+                this.updateAverageResponseTime(responseTime);
+                
+                // Resolve the promise with the data
+                request.resolve(response.data);
+                
+                this.logger.verbose(
+                    `Request ${request.id} completed in ${responseTime}ms`,
+                    LogContext.API
+                );
+                
+                // Reset consecutive errors on success
+                this.consecutiveErrors = 0;
+            } catch (error) {
+                const axiosError = error as AxiosError;
+                
+                this.stats.failedRequests++;
+                this.stats.lastError = axiosError;
+                
+                // Handle rate limiting (HTTP 429)
+                if (axiosError.response?.status === 429) {
+                    // Implement backoff
+                    this.consecutiveErrors++;
+                    const backoffTime = Math.min(30000, 1000 * Math.pow(2, this.consecutiveErrors));
+                    this.rateLimitBackoffUntil = Date.now() + backoffTime;
+                    
+                    this.logger.warn(
+                        `Rate limit exceeded (429). Backing off for ${backoffTime / 1000}s`,
+                        LogContext.API
+                    );
+                    
+                    // Requeue the request
+                    this.requestQueue.unshift({
+                        ...request,
+                        executing: false,
+                        retryCount: request.retryCount + 1
+                    });
+                } else {
+                    // For other errors, just reject
+                    this.consecutiveErrors++;
+                    request.reject(error);
+                }
+            } finally {
+                // Remove request from queue
+                this.removeRequest(request.id);
+            }
         }
     } finally {
         this.processingQueue = false;
@@ -731,7 +848,7 @@ public async getMultipleDeviceStatuses(
     
     // Cancel each request
     for (const request of requestsToCancel) {
-      this.logger.debug(
+      this.logger.verbose(
         `Canceling pending ${request.operationType} request for device ${deviceId}`,
         LogContext.API
       );
@@ -757,6 +874,15 @@ public async getMultipleDeviceStatuses(
     // Set default priority
     const priority = options.priority || RequestPriority.NORMAL;
     
+    // Add detailed verbose logging for the request
+    if (this.logger.isVerboseEnabled()) {
+      this.logger.verbose(
+        `API Request ${options.method} ${options.url} [${priority}]` + 
+        (options.data ? ` with payload: ${JSON.stringify(options.data)}` : ''),
+        LogContext.API
+      );
+    }
+    
     // Wait for startup delay to complete for non-high priority requests
     if (priority !== RequestPriority.HIGH && !this.startupFinished) {
       await this.startupComplete;
@@ -776,6 +902,17 @@ public async getMultipleDeviceStatuses(
       // Add data if provided
       if (options.data) {
         config.data = options.data;
+      }
+      
+      // API detail logging
+      if (this.logger.isApiDetailEnabled()) {
+        this.logger.apiDetail(`Creating request ${requestId}: ${JSON.stringify({
+          method: options.method,
+          url: options.url, 
+          priority,
+          deviceId: options.deviceId,
+          operationType: options.operationType
+        })}`);
       }
       
       // Add to queue
@@ -801,9 +938,7 @@ public async getMultipleDeviceStatuses(
   }
   
   /**
-   * Handle API errors
-   * @param context Error context description
-   * @param error Error object
+   * Handle API errors with better logging
    */
   private handleApiError(context: string, error: unknown): void {
     // Cast to Axios error if possible
@@ -814,7 +949,7 @@ public async getMultipleDeviceStatuses(
     let responseStatus = 0;
     let responseData = null;
     
-          // Get error details
+    // Get error details
     if (axios.isAxiosError(axiosError)) {
       responseStatus = axiosError.response?.status || 0;
       responseData = axiosError.response?.data;
@@ -826,12 +961,22 @@ public async getMultipleDeviceStatuses(
       );
       
       if (responseData) {
-        this.logger.debug(`Response data: ${JSON.stringify(responseData)}`, LogContext.API);
+        // Log the full response data in verbose mode
+        if (this.logger.isVerboseEnabled()) {
+          this.logger.verbose(`Response error data: ${JSON.stringify(responseData)}`, LogContext.API);
+        } else {
+          this.logger.debug(`Response error data available (enable verbose logging to view)`, LogContext.API);
+        }
       }
     } else {
       // Not an Axios error
       errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error in ${context}: ${errorMessage}`, LogContext.API);
+    }
+    
+    // For API detail logging, include stack trace if available
+    if (this.logger.isApiDetailEnabled() && error instanceof Error && error.stack) {
+      this.logger.apiDetail(`Error stack trace: ${error.stack}`);
     }
   }
   

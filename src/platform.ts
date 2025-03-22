@@ -23,8 +23,6 @@ import { SleepMeAccessory } from './accessory.js';
 import { SleepMeScheduler, DeviceSchedule, ScheduledEvent } from './scheduler.js';
 import { EnhancedLogger, LogContext, LogLevelString } from './utils/logger.js';
 import { PLATFORM_NAME, PLUGIN_NAME, DEFAULT_POLLING_INTERVAL } from './settings.js';
-import axios from 'axios';
-import { API_BASE_URL } from './settings.js';
 
 /**
  * SleepMe Platform
@@ -47,13 +45,13 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   // Enhanced logger for better debugging and error reporting
   public readonly log: EnhancedLogger;
   
-/**
- * Configuration options parsed from config.json
- */
-public readonly logLevel: string = 'normal';
-public readonly debugMode: boolean = false;
-public readonly pollingInterval: number;
-public readonly temperatureUnit: string = 'C';
+  /**
+   * Configuration options parsed from config.json
+   */
+  public readonly logLevel: LogLevelString;
+  public readonly debugMode: boolean = false;
+  public readonly pollingInterval: number;
+  public readonly temperatureUnit: string = 'C';
   
   // Map to track active accessory instances for proper cleanup
   private readonly accessoryInstances: Map<string, SleepMeAccessory> = new Map();
@@ -78,17 +76,17 @@ public readonly temperatureUnit: string = 'C';
     this.Service = this.homebridgeApi.hap.Service;
     this.Characteristic = this.homebridgeApi.hap.Characteristic;
     
-  // Parse configuration options with defaults and validation
-this.temperatureUnit = (config.unit as string) || 'C';
+    // Parse configuration options with defaults and validation
+    this.temperatureUnit = (config.unit as string) || 'C';
 
-// Set polling interval with minimum and maximum bounds for safety
-this.pollingInterval = Math.max(120, Math.min(900, 
-  parseInt(String(config.pollingInterval)) || DEFAULT_POLLING_INTERVAL));
+    // Set polling interval with minimum and maximum bounds for safety
+    this.pollingInterval = Math.max(30, Math.min(900, 
+      parseInt(String(config.pollingInterval)) || DEFAULT_POLLING_INTERVAL));
 
     // Handle log level determination
     if (typeof config.logLevel === 'string') {
       // Validate and type-cast the log level
-      this.logLevel = ['normal', 'debug', 'verbose'].includes(config.logLevel) 
+      this.logLevel = ['normal', 'debug', 'verbose', 'api_detail'].includes(config.logLevel) 
         ? (config.logLevel as LogLevelString) 
         : 'normal';
     } else {
@@ -103,6 +101,17 @@ this.pollingInterval = Math.max(120, Math.min(900,
     // Initialize the logger with the determined log level
     this.log = new EnhancedLogger(logger, this.logLevel, true);
     
+    // Log platform initialization with full config
+    this.log.verbose(
+      `Platform configuration: ${JSON.stringify({
+        temperatureUnit: this.temperatureUnit,
+        pollingInterval: this.pollingInterval,
+        logLevel: this.logLevel,
+        enableScheduling: config.enableScheduling || false,
+        scheduleCount: config.schedules ? (config.schedules as any[]).length : 0
+      })}`,
+      LogContext.PLATFORM
+    );
     
     // Validate that the API token is present in the configuration
     if (!config.apiToken) {
@@ -185,6 +194,14 @@ this.pollingInterval = Math.max(120, Math.min(900,
       );
     } else {
       this.log.debug(`Cached accessory device ID: ${accessory.context.device.id}`, LogContext.PLATFORM);
+      
+      // Log the full accessory context in verbose mode
+      if (this.log.isVerboseEnabled()) {
+        this.log.verbose(
+          `Accessory context: ${JSON.stringify(accessory.context)}`,
+          LogContext.PLATFORM
+        );
+      }
     }
     
     // Store the accessory in our array for later use
@@ -207,6 +224,13 @@ this.pollingInterval = Math.max(120, Math.min(900,
         // Use the devices from config instead of making an API call
         this.log.info(`Using ${configuredDevices.length} devices from configuration`, LogContext.PLATFORM);
         
+        // Log configured devices in verbose mode
+        if (this.log.isVerboseEnabled()) {
+          configuredDevices.forEach((device, index) => {
+            this.log.verbose(`Configured device ${index + 1}: ID=${device.id}, Name=${device.name || 'Unnamed'}`, LogContext.PLATFORM);
+          });
+        }
+        
         // Map config devices to the format expected by the rest of the code
         devices = configuredDevices.map(device => ({
           id: device.id,
@@ -224,7 +248,6 @@ this.pollingInterval = Math.max(120, Math.min(900,
             'No SleepMe devices found. Check your API token and connectivity.',
             LogContext.PLATFORM
           );
-          this.testApiConnection();
           return;
         }
       }
@@ -275,9 +298,7 @@ this.pollingInterval = Math.max(120, Math.min(900,
             existingAccessory.displayName = displayName;
             this.log.debug(`Updated accessory name to: ${displayName}`, LogContext.PLATFORM);
           }
-          // After device validation, add this log
-this.log.info(`Successfully found ${devices.length} devices to initialize`, LogContext.PLATFORM);
-
+          
           // Update platform accessories in Homebridge
           this.homebridgeApi.updatePlatformAccessories([existingAccessory]);
           
@@ -316,40 +337,7 @@ this.log.info(`Successfully found ${devices.length} devices to initialize`, LogC
       );
     }
   }
-  /**
- * Test the API connection by making a minimal request
- * Helps diagnose connectivity issues during startup
- */
-private async testApiConnection(): Promise<void> {
-  this.log.info('Testing API connection...', LogContext.PLATFORM);
-  try {
-    // Make a direct request to the API using axios to bypass our queueing
-    const response = await axios.get(`${API_BASE_URL}/devices`, {
-      headers: {
-        'Authorization': `Bearer ${this.config.apiToken}`
-      },
-      timeout: 10000 // 10 second timeout
-    });
-    
-    this.log.info(
-      `API test success: Status ${response.status}, found ${Array.isArray(response.data) ? response.data.length : 'unknown'} devices`,
-      LogContext.PLATFORM
-    );
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      this.log.error(
-        `API test failed: ${error.message}, Status: ${error.response?.status || 'unknown'}, ` +
-        `Data: ${JSON.stringify(error.response?.data || {})}`,
-        LogContext.PLATFORM
-      );
-    } else {
-      this.log.error(
-        `API test error: ${error instanceof Error ? error.message : String(error)}`,
-        LogContext.PLATFORM
-      );
-    }
-  }
-}
+  
   /**
    * Initialize an accessory with its handler
    * Handles connecting scheduler events to the accessory
@@ -357,68 +345,42 @@ private async testApiConnection(): Promise<void> {
    * @param accessory - The platform accessory to initialize
    * @param deviceId - The device ID for this accessory
    */
-/**
- * Initialize an accessory with its handler
- * Handles connecting scheduler events to the accessory
- * 
- * @param accessory - The platform accessory to initialize
- * @param deviceId - The device ID for this accessory
- */
-private initializeAccessory(accessory: PlatformAccessory, deviceId: string): void {
-  this.log.info(`Initializing accessory for device ID: ${deviceId}`, LogContext.PLATFORM);
-  
-  // First, remove any existing handler for this accessory
-  const existingHandler = this.accessoryInstances.get(deviceId);
-  if (existingHandler) {
-    existingHandler.cleanup();
-    this.accessoryInstances.delete(deviceId);
+  private initializeAccessory(accessory: PlatformAccessory, deviceId: string): void {
+    this.log.info(`Initializing accessory for device ID: ${deviceId}`, LogContext.PLATFORM);
     
-    // Add a small delay before creating the new handler
-    setTimeout(() => {
-      this.createAccessoryHandler(accessory, deviceId);
+    // First, remove any existing handler for this accessory
+    const existingHandler = this.accessoryInstances.get(deviceId);
+    if (existingHandler) {
+      existingHandler.cleanup();
+      this.accessoryInstances.delete(deviceId);
       
-      // Trigger an initial refresh after a short delay
+      // Add a small delay before creating the new handler
       setTimeout(() => {
-        const handler = this.accessoryInstances.get(deviceId);
-        if (handler) {
-          this.log.info(`Triggering initial refresh for device ${deviceId}`, LogContext.PLATFORM);
-          handler.refreshStatus(true).catch(err => 
-            this.log.error(`Initial status refresh failed: ${err}`, LogContext.ACCESSORY)
-          );
-        }
-      }, 2000); // 2 second delay before initial refresh
-    }, 5000);
-  } else {
-    // Create handler immediately if no existing one
-    this.createAccessoryHandler(accessory, deviceId);
-    
-    // Trigger an initial refresh after a short delay
-    setTimeout(() => {
-      const handler = this.accessoryInstances.get(deviceId);
-      if (handler) {
-        this.log.info(`Triggering initial refresh for device ${deviceId}`, LogContext.PLATFORM);
-        handler.refreshStatus(true).catch(err => 
-          this.log.error(`Initial status refresh failed: ${err}`, LogContext.ACCESSORY)
-        );
-      }
-    }, 2000); // 2 second delay before initial refresh
+        this.createAccessoryHandler(accessory, deviceId);
+      }, 5000);
+    } else {
+      // Create handler immediately if no existing one
+      this.createAccessoryHandler(accessory, deviceId);
+    }
   }
-}
+  
   /**
- * Create a new accessory handler
- * @param accessory - The platform accessory to create a handler for
- * @param deviceId - The device ID for this accessory
- */
-private createAccessoryHandler(accessory: PlatformAccessory, deviceId: string): void {
-  try {
-    this.log.info(`Creating accessory handler for device ${deviceId}`, LogContext.PLATFORM);
-    
+   * Create a new accessory handler
+   * 
+   * @param accessory - The platform accessory to create a handler for
+   * @param deviceId - The device ID for this accessory
+   */
+  private createAccessoryHandler(accessory: PlatformAccessory, deviceId: string): void {
     // Create new accessory handler
     const handler = new SleepMeAccessory(this, accessory, this.api);
     
     // Connect the handler to scheduler events
     this.scheduler.on('scheduledEventExecuted', (eventData: { deviceId: string, temperature: number, state: string }) => {
       if (eventData.deviceId === deviceId) {
+        this.log.verbose(
+          `Scheduler event executed: ${JSON.stringify(eventData)}`, 
+          LogContext.SCHEDULER
+        );
         handler.handleScheduledEvent(eventData);
       }
     });
@@ -426,15 +388,9 @@ private createAccessoryHandler(accessory: PlatformAccessory, deviceId: string): 
     // Store the handler for later cleanup
     this.accessoryInstances.set(deviceId, handler);
     
-    this.log.info(`Successfully initialized accessory for device ${deviceId}`, LogContext.PLATFORM);
-  } catch (error) {
-    this.log.error(
-      `Error creating accessory handler: ${error instanceof Error ? error.message : String(error)}`,
-      LogContext.PLATFORM
-    );
+    this.log.verbose(`Accessory handler created for device ${deviceId}`, LogContext.PLATFORM);
   }
-}
-
+  
   /**
    * Clean up accessories that are no longer active
    * Removes accessories from Homebridge that don't match active device IDs
@@ -497,6 +453,11 @@ private createAccessoryHandler(accessory: PlatformAccessory, deviceId: string): 
     
     this.log.info('Initializing schedules from config', LogContext.PLATFORM);
     
+    // Log all schedules in verbose mode
+    if (this.log.isVerboseEnabled()) {
+      this.log.verbose(`Schedule config: ${JSON.stringify(schedules)}`, LogContext.PLATFORM);
+    }
+    
     try {
       // Get device IDs from either configured devices or cached accessories
       const deviceIds: string[] = [];
@@ -520,6 +481,8 @@ private createAccessoryHandler(accessory: PlatformAccessory, deviceId: string): 
           }
         });
       }
+      
+      this.log.verbose(`Setting up schedules for ${deviceIds.length} devices`, LogContext.PLATFORM);
       
       // Create schedules for each device with staggered timing to prevent API overload
       deviceIds.forEach((deviceId, index) => {
@@ -585,6 +548,13 @@ private createAccessoryHandler(accessory: PlatformAccessory, deviceId: string): 
         warmHugDuration: parseInt(item.warmHugDuration || '20', 10)
       };
       
+      // Log event details in verbose mode
+      this.log.verbose(
+        `Adding schedule event: time=${event.time}, temp=${event.temperature}°C, ` +
+        `days=[${event.days.join(',')}], warmHug=${event.warmHug}`,
+        LogContext.PLATFORM
+      );
+      
       schedule.events.push(event);
     }
     
@@ -593,5 +563,20 @@ private createAccessoryHandler(accessory: PlatformAccessory, deviceId: string): 
       this.scheduler.setDeviceSchedule(schedule);
       this.log.info(`Initialized schedule for device ${deviceId} with ${schedule.events.length} events`, LogContext.PLATFORM);
     }
+  }
+  
+  /**
+   * Check if verbose logging is enabled
+   * Utility methods for components to check without verbose string concatenation
+   */
+  public isVerboseLoggingEnabled(): boolean {
+    return this.log.isVerboseEnabled();
+  }
+
+  /**
+   * Check if detailed API logging is enabled
+   */
+  public isDetailLoggingEnabled(): boolean {
+    return this.log.isApiDetailEnabled();
   }
 }

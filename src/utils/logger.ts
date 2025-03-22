@@ -94,8 +94,6 @@ export class EnhancedLogger {
     return LogLevel.INFO;
   }
   
-  // Rest of your methods unchanged...
-  
   /**
    * Format a message with timestamp and context
    */
@@ -154,25 +152,36 @@ export class EnhancedLogger {
   
   /**
    * Log a verbose debug message (only in verbose mode)
+   * Modified to improve visibility in logs
    */
   public verbose(message: string, context?: LogContext): void {
     if (this.logLevel >= LogLevel.VERBOSE) {
-      this.logger.debug(this.formatMessage(`VERBOSE: ${message}`, context));
+      // Don't prepend "VERBOSE:" as it makes logs harder to read
+      this.logger.debug(this.formatMessage(message, context));
     }
   }
   
- /**
- * Log a HomeKit interaction
- * Provides consistent format for tracking HomeKit characteristic operations
- */
-public homekit(action: string, characteristic: string, value?: any): void {
-  if (this.logLevel >= LogLevel.DEBUG) {
-    const message = `HomeKit ${action}: ${characteristic}` + 
-      (value !== undefined ? ` → ${value}` : '');
-    
-    this.debug(message, LogContext.HOMEKIT);
+  /**
+   * NEW: Log detailed API information (only in highest verbosity mode)
+   * For extremely detailed debugging of API calls, parameters, responses, etc.
+   */
+  public apiDetail(message: string): void {
+    if (this.logLevel >= LogLevel.API_DETAIL) {
+      this.logger.debug(this.formatMessage(`API_DETAIL: ${message}`, LogContext.API));
+    }
   }
-}
+  
+  /**
+   * Log a HomeKit interaction
+   */
+  public homekit(action: string, characteristic: string, value?: any): void {
+    if (this.logLevel >= LogLevel.DEBUG) {
+      const message = `HomeKit ${action}: ${characteristic}` + 
+        (value !== undefined ? ` → ${JSON.stringify(value)}` : '');
+      
+      this.debug(message, LogContext.HOMEKIT);
+    }
+  }
   
   /**
    * Log an API request or response
@@ -221,5 +230,20 @@ public homekit(action: string, characteristic: string, value?: any): void {
    */
   public getLogLevel(): LogLevel {
     return this.logLevel;
+  }
+
+  /**
+   * NEW: Check if verbose logging is enabled
+   * Utility method to avoid unnecessary string concatenation in verbose logs
+   */
+  public isVerboseEnabled(): boolean {
+    return this.logLevel >= LogLevel.VERBOSE;
+  }
+
+  /**
+   * NEW: Check if API detail logging is enabled
+   */
+  public isApiDetailEnabled(): boolean {
+    return this.logLevel >= LogLevel.API_DETAIL;
   }
 }
