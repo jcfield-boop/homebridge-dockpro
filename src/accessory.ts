@@ -43,6 +43,7 @@ export class SleepMeAccessory {
   
   // Constants from the platform
   private readonly Characteristic;
+
   constructor(
     private readonly platform: SleepMePlatform,
     private readonly accessory: PlatformAccessory,
@@ -60,75 +61,79 @@ export class SleepMeAccessory {
       throw new Error(`Accessory missing device ID: ${this.displayName}`);
     }
     
-    // Set accessory information
+    // Set accessory information with default values
+    // These will be properly updated when we get device status
     this.informationService = this.accessory.getService(this.platform.Service.AccessoryInformation)!
       .setCharacteristic(this.Characteristic.Manufacturer, 'Sleepme Inc.')
       .setCharacteristic(this.Characteristic.Model, this.deviceModel)
-      .setCharacteristic(this.Characteristic.SerialNumber, this.deviceId);
-
+      .setCharacteristic(this.Characteristic.SerialNumber, this.deviceId)
+      .setCharacteristic(this.Characteristic.FirmwareRevision, this.firmwareVersion);
+  
     // Get or create the thermostat service
     this.service = this.accessory.getService(this.platform.Service.Thermostat) || 
       this.accessory.addService(this.platform.Service.Thermostat, this.displayName);
-      // Set up required thermostat characteristics
+      
+    // Set up required thermostat characteristics
     
     // Current Temperature
     this.service.getCharacteristic(this.Characteristic.CurrentTemperature)
     .onGet(this.handleCurrentTemperatureGet.bind(this));
   
-  // Target Temperature - allow changes in any state
-  this.service.getCharacteristic(this.Characteristic.TargetTemperature)
-    .setProps({
-      minValue: MIN_TEMPERATURE_C,
-      maxValue: MAX_TEMPERATURE_C,
-      minStep: TEMPERATURE_STEP,
-    })
-    .onGet(this.handleTargetTemperatureGet.bind(this))
-    .onSet(this.handleTargetTemperatureSet.bind(this));
+    // Target Temperature - allow changes in any state
+    this.service.getCharacteristic(this.Characteristic.TargetTemperature)
+      .setProps({
+        minValue: MIN_TEMPERATURE_C,
+        maxValue: MAX_TEMPERATURE_C,
+        minStep: TEMPERATURE_STEP,
+      })
+      .onGet(this.handleTargetTemperatureGet.bind(this))
+      .onSet(this.handleTargetTemperatureSet.bind(this));
   
-  // Current Heating/Cooling State
-  this.service.getCharacteristic(this.Characteristic.CurrentHeatingCoolingState)
-    .onGet(this.handleCurrentHeatingStateGet.bind(this));
+    // Current Heating/Cooling State
+    this.service.getCharacteristic(this.Characteristic.CurrentHeatingCoolingState)
+      .onGet(this.handleCurrentHeatingStateGet.bind(this));
   
-  // Target Heating/Cooling State - LIMIT TO JUST OFF (0) and AUTO (3)
-  this.service.getCharacteristic(this.Characteristic.TargetHeatingCoolingState)
-    .setProps({
-      validValues: [
-        this.Characteristic.TargetHeatingCoolingState.OFF,
-        this.Characteristic.TargetHeatingCoolingState.AUTO
-      ]
-    })
-    .onGet(this.handleTargetHeatingStateGet.bind(this))
-    .onSet(this.handleTargetHeatingStateSet.bind(this));
+    // Target Heating/Cooling State - LIMIT TO JUST OFF (0) and AUTO (3)
+    this.service.getCharacteristic(this.Characteristic.TargetHeatingCoolingState)
+      .setProps({
+        validValues: [
+          this.Characteristic.TargetHeatingCoolingState.OFF,
+          this.Characteristic.TargetHeatingCoolingState.AUTO
+        ]
+      })
+      .onGet(this.handleTargetHeatingStateGet.bind(this))
+      .onSet(this.handleTargetHeatingStateSet.bind(this));
   
-  // Temperature Display Units
-  const displayUnits = this.platform.temperatureUnit === 'C' 
-    ? this.Characteristic.TemperatureDisplayUnits.CELSIUS
-    : this.Characteristic.TemperatureDisplayUnits.FAHRENHEIT;
+    // Temperature Display Units
+    const displayUnits = this.platform.temperatureUnit === 'C' 
+      ? this.Characteristic.TemperatureDisplayUnits.CELSIUS
+      : this.Characteristic.TemperatureDisplayUnits.FAHRENHEIT;
   
-  this.service.getCharacteristic(this.Characteristic.TemperatureDisplayUnits)
-    .updateValue(displayUnits)
-    .onGet(() => displayUnits);
+    this.service.getCharacteristic(this.Characteristic.TemperatureDisplayUnits)
+      .updateValue(displayUnits)
+      .onGet(() => displayUnits);
   
-  // Set the initial state to AUTO
-  this.service.updateCharacteristic(
-    this.Characteristic.TargetHeatingCoolingState,
-    this.Characteristic.TargetHeatingCoolingState.AUTO
-  );
- // Initialize the device state
- this.refreshDeviceStatus(true)  // Pass true to indicate this is the initial setup
- .catch(error => this.platform.log.error(
-   `Error initializing device status: ${error instanceof Error ? error.message : String(error)}`,
-   LogContext.ACCESSORY
- ));
-
-// Set up polling interval
-this.setupStatusPolling();
-
-// Set up schedule polling
-this.setupSchedulePolling();
-
-this.platform.log.info(`Accessory initialized: ${this.displayName} (ID: ${this.deviceId})`, LogContext.ACCESSORY);
-}
+    // Set the initial state to AUTO
+    this.service.updateCharacteristic(
+      this.Characteristic.TargetHeatingCoolingState,
+      this.Characteristic.TargetHeatingCoolingState.AUTO
+    );
+    
+    // Initialize the device state
+    this.refreshDeviceStatus(true)  // Pass true to indicate this is the initial setup
+    .catch(error => this.platform.log.error(
+      `Error initializing device status: ${error instanceof Error ? error.message : String(error)}`,
+      LogContext.ACCESSORY
+    ));
+  
+    // Set up polling interval
+    this.setupStatusPolling();
+  
+    // Set up schedule polling
+    this.setupSchedulePolling();
+  
+    this.platform.log.info(`Accessory initialized: ${this.displayName} (ID: ${this.deviceId})`, LogContext.ACCESSORY);
+  }
 
 /**
 * Set up the status polling mechanism
@@ -244,11 +249,13 @@ private updateWaterLevelService(waterLevel: number, isWaterLow: boolean): void {
 
 /**
  * Detect device model based on attachments or other characteristics
+ * Enhanced to better identify device models and improve HomeKit display
  */
 private detectDeviceModel(data: Record<string, any>): string {
+  // First check attachments which is most reliable
   const attachments = this.apiClient.extractNestedValue(data, 'attachments');
   
-  if (Array.isArray(attachments)) {
+  if (Array.isArray(attachments) && attachments.length > 0) {
     if (attachments.includes('CHILIPAD_PRO')) {
       return 'ChiliPad Pro';
     } else if (attachments.includes('OOLER')) {
@@ -256,19 +263,46 @@ private detectDeviceModel(data: Record<string, any>): string {
     } else if (attachments.includes('DOCK_PRO')) {
       return 'Dock Pro';
     }
+    
+    // If there are attachments but none match known types, log them for debugging
+    this.platform.log.debug(
+      `Unknown device attachments: ${attachments.join(', ')}`,
+      LogContext.ACCESSORY
+    );
   }
   
-  // Check model field directly
+  // Next check model field directly
   const model = this.apiClient.extractNestedValue(data, 'about.model') || 
                 this.apiClient.extractNestedValue(data, 'model');
   
   if (model) {
-    if (model.includes('DP')) {
-      return 'Dock Pro';
-    } else if (model.includes('OL')) {
-      return 'OOLER Sleep System';
-    } else if (model.includes('CP')) {
-      return 'ChiliPad';
+    this.platform.log.debug(`Device reports model: ${model}`, LogContext.ACCESSORY);
+    
+    if (typeof model === 'string') {
+      if (model.includes('DP')) {
+        return 'Dock Pro';
+      } else if (model.includes('OL')) {
+        return 'OOLER Sleep System';
+      } else if (model.includes('CP')) {
+        return 'ChiliPad';
+      }
+      
+      // Return the raw model string if no specific type is detected
+      return `SleepMe ${model}`;
+    }
+  }
+  
+  // Check firmware version for clues
+  const firmware = this.apiClient.extractNestedValue(data, 'about.firmware_version') ||
+                  this.apiClient.extractNestedValue(data, 'firmware_version');
+  
+  if (firmware) {
+    if (firmware.toString().startsWith('5.')) {
+      return 'Dock Pro'; // Dock Pro typically uses firmware v5.x
+    } else if (firmware.toString().startsWith('4.')) {
+      return 'OOLER Sleep System'; // OOLER typically uses firmware v4.x
+    } else if (firmware.toString().startsWith('3.')) {
+      return 'ChiliPad'; // ChiliPad typically uses firmware v3.x
     }
   }
   
@@ -293,8 +327,8 @@ public cleanup(): void {
 }
 
 /**
- * Extract thermal status from API response
- * Ensures correct display of current temperature regardless of device state
+ * Refreshes the device status from the API
+ * Ensures correct display of device model, firmware version, and current temperature
  */
 private async refreshDeviceStatus(isInitialSetup = false): Promise<void> {
   // Prevent multiple concurrent updates
@@ -329,6 +363,7 @@ private async refreshDeviceStatus(isInitialSetup = false): Promise<void> {
           const detectedModel = this.detectDeviceModel(status.rawResponse);
           if (detectedModel !== this.deviceModel) {
             this.deviceModel = detectedModel;
+            // Update the model in HomeKit
             this.informationService.updateCharacteristic(
               this.Characteristic.Model,
               this.deviceModel
@@ -737,6 +772,7 @@ private async handleTargetHeatingStateSet(value: CharacteristicValue): Promise<v
 
 /**
  * Validate and constrain temperature values
+ * Fixed to ensure proper minimum temperature validation
  */
 private validateTemperature(temperature: number): number {
   if (typeof temperature !== 'number' || isNaN(temperature)) {
@@ -747,10 +783,10 @@ private validateTemperature(temperature: number): number {
     return this.targetTemperature;
   }
   
-  // Constrain to valid range
+  // Constrain to valid range - properly referencing MIN_TEMPERATURE_C from settings.ts
   if (temperature < MIN_TEMPERATURE_C) {
     this.platform.log.warn(
-      `Temperature ${temperature}°C below minimum, using ${MIN_TEMPERATURE_C}°C`,
+      `Temperature ${temperature}°C below minimum ${MIN_TEMPERATURE_C}°C, using ${MIN_TEMPERATURE_C}°C`,
       LogContext.ACCESSORY
     );
     return MIN_TEMPERATURE_C;
@@ -758,7 +794,7 @@ private validateTemperature(temperature: number): number {
   
   if (temperature > MAX_TEMPERATURE_C) {
     this.platform.log.warn(
-      `Temperature ${temperature}°C above maximum, using ${MAX_TEMPERATURE_C}°C`,
+      `Temperature ${temperature}°C above maximum ${MAX_TEMPERATURE_C}°C, using ${MAX_TEMPERATURE_C}°C`,
       LogContext.ACCESSORY
     );
     return MAX_TEMPERATURE_C;
@@ -767,10 +803,10 @@ private validateTemperature(temperature: number): number {
   // Round to nearest step value
   return Math.round(temperature / TEMPERATURE_STEP) * TEMPERATURE_STEP;
 }
- /**
+/**
    * Get the name of a heating/cooling state for logging
    */
- private getHeatingStateName(state: number): string {
+private getHeatingStateName(state: number): string {
   switch (state) {
     case this.Characteristic.CurrentHeatingCoolingState.OFF:
     case this.Characteristic.TargetHeatingCoolingState.OFF:

@@ -39,12 +39,12 @@ export const TEMPERATURE_STEP = 0.5;
 
 /**
  * Minimum time between API requests in milliseconds
- * Increased to be more conservative with API calls
+ * Reduced to be less conservative with API calls
  */
-export const MIN_REQUEST_INTERVAL = 12000; // 12 seconds (increased from 8)
+export const MIN_REQUEST_INTERVAL = 4000; // 4 seconds (reduced from 12)
 
 /**
  * Maximum API requests per minute (to respect rate limits)
- * Reduced from previous value to be more conservative
+ * Increased from previous value to be less conservative
  */
-export const MAX_REQUESTS_PER_MINUTE = 6; // Conservative limit (reduced from 8)
+export const MAX_REQUESTS_PER_MINUTE = 9; // Less conservative limit (increased from 6)

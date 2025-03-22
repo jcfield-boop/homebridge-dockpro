@@ -24,7 +24,8 @@
         "default": "C",
         "enum": ["C", "F"],
         "enumNames": ["Celsius (°C)", "Fahrenheit (°F)"],
-        "description": "Select preferred temperature unit"
+        "description": "Select preferred temperature unit",
+        "required": true
       },
       "enableScheduling": {
         "title": "Enable Scheduling",
@@ -137,7 +138,7 @@
         "description": "Log additional details for advanced troubleshooting"
       }
     },
-    "required": ["apiToken"]
+    "required": ["apiToken", "unit"]
   },
   "layout": [
     "name",

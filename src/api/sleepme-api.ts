@@ -70,7 +70,7 @@ export class SleepMeApi {
       setTimeout(() => {
         this.logger.debug('Initial startup delay complete', LogContext.API);
         resolve();
-      }, 15000); // 15 second startup delay (increased from 10)
+      }, 5000); // 5 second startup delay (reduced from 15)
     });
     
     this.logger.info('SleepMe API client initialized', LogContext.API);
@@ -438,7 +438,7 @@ export class SleepMeApi {
   }
   /**
    * Apply strict rate limiting with backoff periods for different priority levels
-   * Enhanced to provide more aggressive rate limiting prevention
+   * Enhanced to provide less aggressive rate limiting
    */
   private async applyStrictRateLimit(priority: string): Promise<void> {
     const now = Date.now();
@@ -455,22 +455,22 @@ export class SleepMeApi {
       }
     }
     
-    // If we've hit a rate limit before, enforce much stricter limits
+    // If we've hit a rate limit before, enforce stricter limits, but still less conservative
     let maxAllowedRequests = SleepMeApi.requestTracking.rateLimitHit 
-      ? Math.floor(MAX_REQUESTS_PER_MINUTE * 0.15)  // Only 15% of max if rate limit was hit (more restrictive)
-      : Math.floor(MAX_REQUESTS_PER_MINUTE * 0.4);  // 40% of max normally (more restrictive)
+      ? Math.floor(MAX_REQUESTS_PER_MINUTE * 0.3)  // 30% of max if rate limited (less restrictive)
+      : Math.floor(MAX_REQUESTS_PER_MINUTE * 0.7);  // 70% of max normally (less restrictive)
     
     // Override for high priority - allow more but still be cautious
     if (priority === 'high') {
       maxAllowedRequests = SleepMeApi.requestTracking.rateLimitHit 
-        ? Math.floor(MAX_REQUESTS_PER_MINUTE * 0.25) // 25% for high priority when rate limited 
-        : Math.floor(MAX_REQUESTS_PER_MINUTE * 0.6); // 60% for high priority normally
+        ? Math.floor(MAX_REQUESTS_PER_MINUTE * 0.5) // 50% for high priority when rate limited 
+        : Math.floor(MAX_REQUESTS_PER_MINUTE * 0.8); // 80% for high priority normally
     }
     
     // If we've reached our self-imposed limit
     if (SleepMeApi.requestTracking.count >= maxAllowedRequests) {
-      // Time until the current minute resets + a buffer
-      const timeUntilReset = (60000 - (now - SleepMeApi.requestTracking.lastReset)) + 10000; // 10s buffer (increased)
+      // Time until the current minute resets + a smaller buffer
+      const timeUntilReset = (60000 - (now - SleepMeApi.requestTracking.lastReset)) + 5000; // 5s buffer (reduced)
       
       this.logger.warn(
         `Rate limit threshold reached (${SleepMeApi.requestTracking.count}/${MAX_REQUESTS_PER_MINUTE}), ` +
@@ -486,16 +486,16 @@ export class SleepMeApi {
       SleepMeApi.requestTracking.lastReset = Date.now();
     }
     
-    // Set minimum delays between requests based on priority and rate limit history
+    // Set reduced delays between requests
     let minDelay = MIN_REQUEST_INTERVAL;
     
     if (SleepMeApi.requestTracking.rateLimitHit) {
-      // Much longer delays if we've hit rate limits
-      minDelay = priority === 'high' ? 15000 : 20000; // 15-20 seconds between requests (increased)
+      // Reduced delays if we've hit rate limits
+      minDelay = priority === 'high' ? 6000 : 8000; // 6-8 seconds between requests (reduced)
     } else {
       // Normal operation delays
-      minDelay = priority === 'high' ? 8000 : 
-                 priority === 'normal' ? 12000 : 15000; // 8-15 seconds between requests (increased)
+      minDelay = priority === 'high' ? 3000 : 
+                 priority === 'normal' ? 4000 : 6000; // 3-6 seconds between requests (reduced)
     }
     
     // Enforce minimum delay between requests
@@ -575,10 +575,9 @@ export class SleepMeApi {
             // Set global rate limit flag and backoff time
             SleepMeApi.requestTracking.rateLimitHit = true;
             
-            // Calculate backoff time based on retry count (exponential backoff)
-            // Much more aggressive backoff than before
-            const baseBackoff = 120000; // Start with 2 minutes (increased from 1)
-            const backoffTime = Math.min(900000, baseBackoff * Math.pow(2, retryCount)); // Max 15 minutes
+            // Calculate backoff time based on retry count (exponential backoff) - less aggressive
+            const baseBackoff = 60000; // Start with 1 minute (reduced from 2)
+            const backoffTime = Math.min(600000, baseBackoff * Math.pow(1.5, retryCount)); // Max 10 minutes (reduced)
             const backoffUntil = Date.now() + backoffTime;
             
             this.logger.warn(
