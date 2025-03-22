@@ -1,7 +1,7 @@
 {
   "name": "homebridge-sleepme-basic",
   "displayName": "Homebridge SleepMeBasic",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "type": "module",
   "private": false,
   "description": "Homebridge plugin for SleepMe devices with scheduling and humidity sensing",
