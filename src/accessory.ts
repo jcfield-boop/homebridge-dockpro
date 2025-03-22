@@ -221,6 +221,7 @@ export class SleepMeAccessory {
 
   /**
    * Update or create the water level service
+   * Maps water level data to a Battery service in HomeKit
    */
   private updateWaterLevelService(waterLevel: number, isWaterLow: boolean): void {
     // Only create/update if we have valid water level data
@@ -228,7 +229,18 @@ export class SleepMeAccessory {
       // Get or create water level service (using Battery service as proxy)
       if (!this.waterLevelService) {
         this.waterLevelService = this.accessory.getService(this.platform.Service.Battery) ||
-                                this.accessory.addService(this.platform.Service.Battery, 'Water Level');
+                               this.accessory.addService(this.platform.Service.Battery, 'Water Level');
+        
+        // Set proper name characteristic for display in HomeKit
+        this.waterLevelService.setCharacteristic(
+          this.Characteristic.Name,
+          'Water Level'
+        );
+        
+        this.platform.log.info(
+          `Created water level service for device ${this.deviceId}`,
+          LogContext.ACCESSORY
+        );
       }
       
       // Update water level (as battery percentage)
@@ -243,7 +255,7 @@ export class SleepMeAccessory {
         isWaterLow ? 1 : 0
       );
 
-      // Set charging state to "Not Charging" since it's not applicable for water level
+      // Set charging state to "Not Charging" since it's not applicable
       this.waterLevelService.updateCharacteristic(
         this.Characteristic.ChargingState,
         this.Characteristic.ChargingState.NOT_CHARGING
@@ -253,6 +265,11 @@ export class SleepMeAccessory {
       if (isWaterLow) {
         this.platform.log.warn(
           `Water level low on device ${this.deviceId}: ${waterLevel}%`,
+          LogContext.ACCESSORY
+        );
+      } else {
+        this.platform.log.debug(
+          `Water level updated to ${waterLevel}%`,
           LogContext.ACCESSORY
         );
       }
@@ -489,23 +506,24 @@ export class SleepMeAccessory {
       
       // Update water level service if water level data is available
       if (status.waterLevel !== undefined) {
-        if (status.waterLevel !== this.waterLevel) {
+        if (status.waterLevel !== this.waterLevel || status.isWaterLow !== this.isWaterLow) {
           this.waterLevel = status.waterLevel;
           this.isWaterLow = !!status.isWaterLow;
           this.updateWaterLevelService(this.waterLevel, this.isWaterLow);
         }
       } else if (status.rawResponse) {
-        // Extract water level data from raw response if not directly provided
-        const waterLevel = this.apiClient.extractNestedValue(status.rawResponse, 'status.water_level') || 
-                         this.apiClient.extractNestedValue(status.rawResponse, 'water_level');
-        
-        const isWaterLow = this.apiClient.extractNestedValue(status.rawResponse, 'status.is_water_low') || 
-                         this.apiClient.extractNestedValue(status.rawResponse, 'is_water_low') || false;
+        // Try to extract water level from raw response if not directly provided
+        const waterLevel = this.apiClient.extractNestedValue(status.rawResponse, 'status.water_level');
+        const isWaterLow = !!this.apiClient.extractNestedValue(status.rawResponse, 'status.is_water_low');
         
         if (waterLevel !== undefined && waterLevel !== this.waterLevel) {
           this.waterLevel = waterLevel;
           this.isWaterLow = isWaterLow;
           this.updateWaterLevelService(this.waterLevel, this.isWaterLow);
+          this.platform.log.info(
+            `Water level extracted from raw response: ${this.waterLevel}%`,
+            LogContext.ACCESSORY
+          );
         }
       }
     } catch (error) {
