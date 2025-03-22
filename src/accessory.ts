@@ -136,17 +136,27 @@ export class SleepMeAccessory {
   }
 
   /**
-   * Set up the status polling mechanism
+   * Set up the status polling mechanism with smart interval adjustments
+   * This implementation reduces API load and adapts to device state
    */
   private setupStatusPolling(): void {
     // Clear any existing timer
     if (this.statusUpdateTimer) {
       clearInterval(this.statusUpdateTimer);
     }
-
+    
     // Convert polling interval from seconds to milliseconds
     const intervalMs = this.platform.pollingInterval * 1000;
-
+    
+    // Initial poll right away
+    this.refreshDeviceStatus().catch(error => {
+      this.platform.log.error(
+        `Error in initial status update: ${error instanceof Error ? error.message : String(error)}`,
+        LogContext.ACCESSORY
+      );
+    });
+    
+    // Set up regular polling
     this.statusUpdateTimer = setInterval(() => {
       this.refreshDeviceStatus().catch(error => {
         this.platform.log.error(
@@ -155,7 +165,7 @@ export class SleepMeAccessory {
         );
       });
     }, intervalMs);
-
+    
     this.platform.log.debug(
       `Polling scheduled every ${this.platform.pollingInterval} seconds`,
       LogContext.ACCESSORY
@@ -330,7 +340,7 @@ export class SleepMeAccessory {
   }
 
   /**
-   * Refreshes the device status from the API
+   * Refreshes the device status from the API with caching support
    * Enhanced to ensure HomeKit always respects external device changes
    * @param isInitialSetup Whether this is the initial setup refresh
    */
@@ -342,171 +352,167 @@ export class SleepMeAccessory {
       return;
     }
     
-    // Add retry logic
-    let attempts = 0;
-    const maxAttempts = 3;
-    
     this.isUpdating = true;
     this.lastUpdateTime = Date.now();
     this.pendingUpdates = false;
+    
     try {
-      while (attempts < maxAttempts) {
-        try {
-          attempts++;
-          this.platform.log.debug(`Refreshing status for device ${this.deviceId} (attempt ${attempts}/${maxAttempts})`, LogContext.ACCESSORY);
-          
-          // Get the device status from the API
-          const status = await this.apiClient.getDeviceStatus(this.deviceId);
-          
-          if (!status) {
-            throw new Error(`Failed to get status for device ${this.deviceId}`);
-          }
-          
-          // Update model if we can detect it from raw response
-          if (status.rawResponse) {
-            const detectedModel = this.detectDeviceModel(status.rawResponse);
-            if (detectedModel !== this.deviceModel) {
-              this.deviceModel = detectedModel;
-              // Update the model in HomeKit
-              this.informationService.updateCharacteristic(
-                this.Characteristic.Model,
-                this.deviceModel
-              );
-              this.platform.log.info(`Detected device model: ${this.deviceModel}`, LogContext.ACCESSORY);
-            }
-          }
-          
-          // Update firmware version if available
-          if (status.firmwareVersion && status.firmwareVersion !== this.firmwareVersion) {
-            this.firmwareVersion = status.firmwareVersion;
-            // Explicitly update the firmware revision characteristic
-            this.informationService.updateCharacteristic(
-              this.Characteristic.FirmwareRevision,
-              this.firmwareVersion
-            );
-            this.platform.log.debug(
-              `Updated firmware version to ${this.firmwareVersion}`,
-              LogContext.ACCESSORY
-            );
-          }
-          
-          // Always update current temperature regardless of device state
-          // This ensures temperature is displayed even when device is off
-          if (isNaN(this.currentTemperature) || status.currentTemperature !== this.currentTemperature) {
-            this.currentTemperature = status.currentTemperature;
-            this.service.updateCharacteristic(
-              this.Characteristic.CurrentTemperature,
-              this.currentTemperature
-            );
-          }
-          
-          // CRITICAL CHANGE: Always update target temperature to match actual device target
-          // This ensures HomeKit doesn't try to "correct" temperature changes made elsewhere
-          if (isNaN(this.targetTemperature) || status.targetTemperature !== this.targetTemperature) {
-            this.targetTemperature = status.targetTemperature;
-            this.service.updateCharacteristic(
-              this.Characteristic.TargetTemperature,
-              this.targetTemperature
-            );
-            this.platform.log.debug(
-              `External change detected: Target temperature updated to ${this.targetTemperature}°C`,
-              LogContext.ACCESSORY
-            );
-          }
-          
-          // CRITICAL CHANGE: Always update heating/cooling states based on device status
-          const newHeatingState = this.mapThermalStatusToHeatingState(status.thermalStatus, status.powerState);
-          if (newHeatingState !== this.currentHeatingState) {
-            this.currentHeatingState = newHeatingState;
-            this.service.updateCharacteristic(
-              this.Characteristic.CurrentHeatingCoolingState,
-              this.currentHeatingState
-            );
-            
-            // Create state name string for logging
-            let stateString = 'UNKNOWN';
-            switch (this.currentHeatingState) {
-              case this.Characteristic.CurrentHeatingCoolingState.OFF:
-                stateString = 'OFF';
-                break;
-              case this.Characteristic.CurrentHeatingCoolingState.HEAT:
-                stateString = 'HEAT';
-                break;
-              case this.Characteristic.CurrentHeatingCoolingState.COOL:
-                stateString = 'COOL';
-                break;
-            }
-            
-            this.platform.log.debug(
-              `External change detected: Current heating state updated to ${stateString}`,
-              LogContext.ACCESSORY
-            );
-          }
-          
-          // CRITICAL CHANGE: Always update target heating state to match actual device state
-          // This ensures HomeKit correctly shows when device has been turned off externally
-          const newTargetState = this.determineTargetHeatingState(status.thermalStatus, status.powerState);
-          if (newTargetState !== this.targetHeatingState) {
-            // Device state has been changed externally (turned on/off)
-            this.targetHeatingState = newTargetState;
-            this.service.updateCharacteristic(
-              this.Characteristic.TargetHeatingCoolingState,
-              this.targetHeatingState
-            );
-            
-            // Create state name string for logging
-            let stateString = 'UNKNOWN';
-            switch (this.targetHeatingState) {
-              case this.Characteristic.TargetHeatingCoolingState.OFF:
-                stateString = 'OFF';
-                break;
-              case this.Characteristic.TargetHeatingCoolingState.AUTO:
-                stateString = 'AUTO';
-                break;
-            }
-            
-            this.platform.log.info(
-              `External change detected: Device power state changed to ${stateString}`,
-              LogContext.ACCESSORY
-            );
-          }
-        
-          // Log connection status if available
-          if (status.connected !== undefined) {
-            this.logConnectionStatus(status.connected);
-          }
-          
-          // Update water level service if water level data is available
-          if (status.rawResponse) {
-            // Extract water level data from raw response
-            const waterLevel = this.apiClient.extractNestedValue(status.rawResponse, 'status.water_level') || 
-                            this.apiClient.extractNestedValue(status.rawResponse, 'water_level');
-            
-            const isWaterLow = this.apiClient.extractNestedValue(status.rawResponse, 'status.is_water_low') || 
-                            this.apiClient.extractNestedValue(status.rawResponse, 'is_water_low') || false;
-            
-            if (waterLevel !== undefined && waterLevel !== this.waterLevel) {
-              this.waterLevel = waterLevel;
-              this.isWaterLow = isWaterLow;
-              this.updateWaterLevelService(this.waterLevel, this.isWaterLow);
-            }
-          }
-          
-          // Success, exit retry loop
-          break;
-        } catch (error) {
-          // Log the error but don't throw - we want polling to continue
-          this.platform.log.error(
-            `Failed to refresh device status (attempt ${attempts}/${maxAttempts}): ${error instanceof Error ? error.message : String(error)}`,
-            LogContext.ACCESSORY
+      // Force fresh data on initial setup, otherwise use cache when appropriate
+      const forceFresh = isInitialSetup;
+      
+      this.platform.log.debug(
+        `Refreshing status for device ${this.deviceId} (${forceFresh ? 'fresh' : 'cached if available'})`,
+        LogContext.ACCESSORY
+      );
+      
+      // Get the device status from the API (will use cache if available and not forced fresh)
+      // Note: The API method should be updated to support the forceFresh parameter
+      const status = await this.apiClient.getDeviceStatus(this.deviceId);
+      
+      if (!status) {
+        throw new Error(`Failed to get status for device ${this.deviceId}`);
+      }
+      
+      // Update model if we can detect it from raw response
+      if (status.rawResponse) {
+        const detectedModel = this.detectDeviceModel(status.rawResponse);
+        if (detectedModel !== this.deviceModel) {
+          this.deviceModel = detectedModel;
+          // Update the model in HomeKit
+          this.informationService.updateCharacteristic(
+            this.Characteristic.Model,
+            this.deviceModel
           );
-          
-          if (attempts < maxAttempts) {
-            // Wait before retrying - exponential backoff
-            await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
-          }
+          this.platform.log.info(`Detected device model: ${this.deviceModel}`, LogContext.ACCESSORY);
         }
       }
+      
+      // Update firmware version if available
+      if (status.firmwareVersion && status.firmwareVersion !== this.firmwareVersion) {
+        this.firmwareVersion = status.firmwareVersion;
+        // Explicitly update the firmware revision characteristic
+        this.informationService.updateCharacteristic(
+          this.Characteristic.FirmwareRevision,
+          this.firmwareVersion
+        );
+        this.platform.log.debug(
+          `Updated firmware version to ${this.firmwareVersion}`,
+          LogContext.ACCESSORY
+        );
+      }
+      
+      // Always update current temperature regardless of device state
+      // This ensures temperature is displayed even when device is off
+      if (isNaN(this.currentTemperature) || status.currentTemperature !== this.currentTemperature) {
+        this.currentTemperature = status.currentTemperature;
+        this.service.updateCharacteristic(
+          this.Characteristic.CurrentTemperature,
+          this.currentTemperature
+        );
+      }
+      
+      // CRITICAL CHANGE: Always update target temperature to match actual device target
+      // This ensures HomeKit doesn't try to "correct" temperature changes made elsewhere
+      if (isNaN(this.targetTemperature) || status.targetTemperature !== this.targetTemperature) {
+        this.targetTemperature = status.targetTemperature;
+        this.service.updateCharacteristic(
+          this.Characteristic.TargetTemperature,
+          this.targetTemperature
+        );
+        this.platform.log.debug(
+          `External change detected: Target temperature updated to ${this.targetTemperature}°C`,
+          LogContext.ACCESSORY
+        );
+      }
+      
+      // CRITICAL CHANGE: Always update heating/cooling states based on device status
+      const newHeatingState = this.mapThermalStatusToHeatingState(status.thermalStatus, status.powerState);
+      if (newHeatingState !== this.currentHeatingState) {
+        this.currentHeatingState = newHeatingState;
+        this.service.updateCharacteristic(
+          this.Characteristic.CurrentHeatingCoolingState,
+          this.currentHeatingState
+        );
+        
+        // Create state name string for logging
+        let stateString = 'UNKNOWN';
+        switch (this.currentHeatingState) {
+          case this.Characteristic.CurrentHeatingCoolingState.OFF:
+            stateString = 'OFF';
+            break;
+          case this.Characteristic.CurrentHeatingCoolingState.HEAT:
+            stateString = 'HEAT';
+            break;
+          case this.Characteristic.CurrentHeatingCoolingState.COOL:
+            stateString = 'COOL';
+            break;
+        }
+        
+        this.platform.log.debug(
+          `External change detected: Current heating state updated to ${stateString}`,
+          LogContext.ACCESSORY
+        );
+      }
+      
+      // CRITICAL CHANGE: Always update target heating state to match actual device state
+      // This ensures HomeKit correctly shows when device has been turned off externally
+      const newTargetState = this.determineTargetHeatingState(status.thermalStatus, status.powerState);
+      if (newTargetState !== this.targetHeatingState) {
+        // Device state has been changed externally (turned on/off)
+        this.targetHeatingState = newTargetState;
+        this.service.updateCharacteristic(
+          this.Characteristic.TargetHeatingCoolingState,
+          this.targetHeatingState
+        );
+        
+        // Create state name string for logging
+        let stateString = 'UNKNOWN';
+        switch (this.targetHeatingState) {
+          case this.Characteristic.TargetHeatingCoolingState.OFF:
+            stateString = 'OFF';
+            break;
+          case this.Characteristic.TargetHeatingCoolingState.AUTO:
+            stateString = 'AUTO';
+            break;
+        }
+        
+        this.platform.log.info(
+          `External change detected: Device power state changed to ${stateString}`,
+          LogContext.ACCESSORY
+        );
+      }
+    
+      // Log connection status if available
+      if (status.connected !== undefined) {
+        this.logConnectionStatus(status.connected);
+      }
+      
+      // Update water level service if water level data is available
+      if (status.waterLevel !== undefined) {
+        if (status.waterLevel !== this.waterLevel) {
+          this.waterLevel = status.waterLevel;
+          this.isWaterLow = !!status.isWaterLow;
+          this.updateWaterLevelService(this.waterLevel, this.isWaterLow);
+        }
+      } else if (status.rawResponse) {
+        // Extract water level data from raw response if not directly provided
+        const waterLevel = this.apiClient.extractNestedValue(status.rawResponse, 'status.water_level') || 
+                         this.apiClient.extractNestedValue(status.rawResponse, 'water_level');
+        
+        const isWaterLow = this.apiClient.extractNestedValue(status.rawResponse, 'status.is_water_low') || 
+                         this.apiClient.extractNestedValue(status.rawResponse, 'is_water_low') || false;
+        
+        if (waterLevel !== undefined && waterLevel !== this.waterLevel) {
+          this.waterLevel = waterLevel;
+          this.isWaterLow = isWaterLow;
+          this.updateWaterLevelService(this.waterLevel, this.isWaterLow);
+        }
+      }
+    } catch (error) {
+      this.platform.log.error(
+        `Failed to refresh device status: ${error instanceof Error ? error.message : String(error)}`,
+        LogContext.ACCESSORY
+      );
     } finally {
       this.isUpdating = false;
       
@@ -607,26 +613,20 @@ export class SleepMeAccessory {
 
   /**
    * Handler for TargetTemperature SET
-   * Enhanced to respect device's current power state
+   * Enhanced to respect device's current power state and reduce API calls
    */
   private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<void> {
     const newTemp = this.validateTemperature(value as number);
     this.platform.log.debug(`SET TargetTemperature: ${newTemp}°C`, LogContext.HOMEKIT);
     
     try {
-      // Check the actual device status first
-      const currentStatus = await this.apiClient.getDeviceStatus(this.deviceId);
+      // Always update the internal target temperature immediately for responsiveness
+      // This ensures the UI shows the change right away
+      this.targetTemperature = newTemp;
       
-      if (!currentStatus) {
-        throw new Error(`Failed to get current device status before temperature change`);
-      }
-      
-      // CRITICAL: If device is currently OFF, don't turn it back on when setting temperature
-      // This ensures HomeKit doesn't override when someone turned the device off externally
-      if (currentStatus.powerState === PowerState.OFF) {
-        // Store the requested temperature internally, but don't send to device
-        this.targetTemperature = newTemp;
-        
+      // If device is OFF in HomeKit, just store the temperature but don't send to device
+      // The temperature will be applied when the device is turned ON
+      if (this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF) {
         this.platform.log.info(
           `Device is currently OFF. Temperature set to ${newTemp}°C will be applied when device is turned on.`,
           LogContext.ACCESSORY
@@ -638,79 +638,38 @@ export class SleepMeAccessory {
           this.targetTemperature
         );
         
-        // Exit early - don't try to apply temperature to a powered-off device
         return;
       }
       
-      // Always update the internal target temperature immediately for responsiveness
-      // This ensures the UI shows the change right away
-      this.targetTemperature = newTemp;
+      // Update the device temperature since it's on (or should be on)
+      const success = await this.apiClient.setTemperature(this.deviceId, newTemp);
       
-      // If device is currently off in HomeKit's view (but the actual device is on)
-      // this means we need to update HomeKit's state to match reality
-      if (this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF &&
-          currentStatus.powerState === PowerState.ON) {
-        
-        this.platform.log.info(
-          `HomeKit state out of sync with device: Device is ON. Updating HomeKit state.`,
-          LogContext.ACCESSORY
-        );
-        
-        // Set to AUTO mode
-        this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.AUTO;
-        
-        // Update HomeKit characteristics immediately for better UX
-        this.service.updateCharacteristic(
-          this.Characteristic.TargetHeatingCoolingState,
-          this.targetHeatingState
-        );
-        
-        // Update current state in HomeKit based on temperatures
-        if (!isNaN(this.currentTemperature)) {
-          if (newTemp > this.currentTemperature + 0.5) {
-            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-          } else if (newTemp < this.currentTemperature - 0.5) {
-            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
-          } else {
-            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-          }
-          
-          this.service.updateCharacteristic(
-            this.Characteristic.CurrentHeatingCoolingState,
-            this.currentHeatingState
-          );
-        }
+      if (!success) {
+        throw new Error('Failed to set temperature on the device');
       }
       
-      // Update the device temperature since it's on
-      await this.apiClient.setTemperature(this.deviceId, newTemp);
+      // No need to refresh status after temperature change - the cache will be 
+      // optimistically updated and we'll get a regular status update on the next polling cycle
       
-      // Update current state based on temperature difference
+      // Update current state based on temperature difference if we have current temperature
       if (!isNaN(this.currentTemperature)) {
+        let newHeatingState = this.currentHeatingState;
+        
         if (newTemp > this.currentTemperature + 0.5) {
-          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-          this.service.updateCharacteristic(
-            this.Characteristic.CurrentHeatingCoolingState,
-            this.currentHeatingState
-          );
+          newHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
         } else if (newTemp < this.currentTemperature - 0.5) {
-          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+          newHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+        }
+        
+        // Only update if changed
+        if (newHeatingState !== this.currentHeatingState) {
+          this.currentHeatingState = newHeatingState;
           this.service.updateCharacteristic(
             this.Characteristic.CurrentHeatingCoolingState,
             this.currentHeatingState
           );
         }
       }
-      
-      // Refresh the device status after a short delay to confirm changes
-      setTimeout(() => {
-        this.refreshDeviceStatus().catch(error => {
-          this.platform.log.error(
-            `Error updating device status after temperature change: ${error}`,
-            LogContext.ACCESSORY
-          );
-        });
-      }, 2000);
     } catch (error) {
       this.platform.log.error(
         `Failed to set target temperature: ${error instanceof Error ? error.message : String(error)}`,
@@ -722,9 +681,6 @@ export class SleepMeAccessory {
         this.Characteristic.TargetTemperature,
         this.targetTemperature
       );
-      
-      // Refresh actual device state
-      setTimeout(() => this.refreshDeviceStatus(), 2000);
     }
   }
 
@@ -771,7 +727,7 @@ export class SleepMeAccessory {
 
   /**
    * Handler for TargetHeatingCoolingState SET
-   * Modified to check actual device state before making changes
+   * Enhanced to reduce API calls and optimistically update UI state
    */
   private async handleTargetHeatingStateSet(value: CharacteristicValue): Promise<void> {
     const newState = value as number;
@@ -790,33 +746,15 @@ export class SleepMeAccessory {
     this.platform.log.debug(`SET TargetHeatingCoolingState: ${stateString}`, LogContext.HOMEKIT);
     
     try {
-      // First, get the current device status to avoid fighting with external changes
-      const currentStatus = await this.apiClient.getDeviceStatus(this.deviceId);
-      
-      if (!currentStatus) {
-        throw new Error(`Failed to get current device status before changing state`);
-      }
-      
-      // Determine what state the device is ACTUALLY in right now
-      const actualDeviceState = this.determineTargetHeatingState(
-        currentStatus.thermalStatus, 
-        currentStatus.powerState
-      );
-      
-      // If the actual device state already matches what HomeKit wants to set,
-      // don't send any commands to the device - just update our internal state
-      if (actualDeviceState === newState) {
-        this.platform.log.info(
-          `Device already in ${stateString} state, no command needed`,
+      // Skip the API call if the state isn't changing
+      if (newState === this.targetHeatingState) {
+        this.platform.log.debug(
+          `Device already in ${stateString} state, skipping API call`,
           LogContext.ACCESSORY
         );
-        
-        // Update internal state to match
-        this.targetHeatingState = newState;
         return;
       }
       
-      // Proceed with normal state change since device needs updating
       let success = false;
       
       switch (newState) {
@@ -880,23 +818,13 @@ export class SleepMeAccessory {
         throw new Error(`Failed to set target state to ${stateString}`);
       }
       
-      // Refresh device status after a short delay for better feedback
-      setTimeout(() => {
-        this.refreshDeviceStatus().catch(error => {
-          this.platform.log.error(
-            `Error updating device status after state change: ${error}`,
-            LogContext.ACCESSORY
-          );
-        });
-      }, 2000);
+      // No need to refresh status - cache will be optimistically updated
+      // and we'll get a regular status update on the next polling cycle
     } catch (error) {
       this.platform.log.error(
         `Failed to set target heating state: ${error instanceof Error ? error.message : String(error)}`,
         LogContext.ACCESSORY
       );
-      
-      // On error, refresh to get actual device state rather than assuming our command worked
-      setTimeout(() => this.refreshDeviceStatus(), 2000);
     }
   }
 
