@@ -1,9 +1,8 @@
-// src/scheduler.ts - Part 1 (Lines 1-250)
-
 /**
  * SleepMe Scheduler Module
  * Provides scheduling capabilities for SleepMe devices
  */
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import { SleepMeApi } from './api/sleepme-api.js';
@@ -53,8 +52,9 @@ export interface SchedulerStatus {
 /**
  * SleepMe Scheduler Class
  * Manages temperature schedules for SleepMe devices
+ * Extends EventEmitter to provide event-based communication
  */
-export class SleepMeScheduler {
+export class SleepMeScheduler extends EventEmitter {
   // Store active timers by device ID
   private eventTimers: Map<string, NodeJS.Timeout> = new Map();
   
@@ -88,6 +88,9 @@ constructor(
     private readonly logger: EnhancedLogger,
     private readonly storagePath: string
   ) {
+    // Initialize EventEmitter
+    super();
+    
     this.logger.info('Initializing SleepMe scheduler', LogContext.SCHEDULER);
     this.loadSchedules();
   }
@@ -128,7 +131,10 @@ constructor(
       }
     });
   } catch (error) {
-    // Error handling...
+    this.logger.error(
+      `Failed to load schedules: ${error instanceof Error ? error.message : String(error)}`,
+      LogContext.SCHEDULER
+    );
   }
 }
   /**
@@ -275,7 +281,6 @@ constructor(
       return false;
     }
   }
-  // src/scheduler.ts - Part 2 (Lines 251-500)
   
   /**
    * Enable or disable a device's schedule
@@ -552,7 +557,6 @@ constructor(
       this.scheduleWarmHug(deviceId, nextEvent, nextEventTime);
     }
   }
-  // src/scheduler.ts - Part 3 (Lines 501-750)
   
   /**
    * Schedule a warm hug process for a device
@@ -739,13 +743,24 @@ constructor(
       const deviceStatus = await this.api.getDeviceStatus(deviceId);
       
       if (deviceStatus) {
+        let state = "auto"; // Default state
+        
         if (deviceStatus.powerState !== 'on') {
           // Turn on the device with the target temperature
           await this.api.turnDeviceOn(deviceId, event.temperature);
+          state = "auto"; // Device was turned on, so state is auto
         } else {
           // Device is already on, just set temperature
           await this.api.setTemperature(deviceId, event.temperature);
+          state = "auto"; // Temperature was changed, state remains auto
         }
+        
+        // Emit event for successful execution
+        this.emit('scheduledEventExecuted', {
+          deviceId,
+          temperature: event.temperature,
+          state
+        });
       } else {
         this.logger.error(`Failed to get device status for event execution on device ${deviceId}`, LogContext.SCHEDULER);
       }
@@ -789,5 +804,4 @@ constructor(
     this.warmHugTimers.clear();
     this.activeWarmHugs.clear();
     this.nextEvents.clear();
-  }
-}
+  }}
