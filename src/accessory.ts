@@ -591,67 +591,61 @@ private lastTemperatureSetTime = 0;
     }
   }
 
-  /**
-   * Map thermal status to HomeKit heating/cooling state
-   */
-  private mapThermalStatusToHeatingState(
-    thermalStatus: ThermalStatus,
-    powerState: PowerState
-  ): number {
-    // If power is off, the heating state is OFF
-    if (powerState === PowerState.OFF) {
-      return this.Characteristic.CurrentHeatingCoolingState.OFF;
-    }
 
-    // Map the thermal status to the appropriate HomeKit state
-    switch (thermalStatus) {
-      case ThermalStatus.HEATING: {
-        return this.Characteristic.CurrentHeatingCoolingState.HEAT;
-      }
-      case ThermalStatus.COOLING: {
-        return this.Characteristic.CurrentHeatingCoolingState.COOL;
-      }
-      case ThermalStatus.ACTIVE: {
-        // For an active but not specifically heating/cooling state,
-        // determine based on target vs current temperature
-        if (!isNaN(this.targetTemperature) && !isNaN(this.currentTemperature)) {
-          if (this.targetTemperature > this.currentTemperature + 0.5) {
-            return this.Characteristic.CurrentHeatingCoolingState.HEAT;
-          } else if (this.targetTemperature < this.currentTemperature - 0.5) {
-            return this.Characteristic.CurrentHeatingCoolingState.COOL;
-          }
-        }
-        // When temperatures are close or undefined, default to HEAT (or last state)
-        return this.currentHeatingState || this.Characteristic.CurrentHeatingCoolingState.HEAT;
-      }
-      case ThermalStatus.STANDBY:
-      case ThermalStatus.OFF:
-      case ThermalStatus.UNKNOWN:
-      default: {
-        return this.Characteristic.CurrentHeatingCoolingState.OFF;
-      }
-    }
+/**
+ * Determine the target heating state from the device status
+ * Simplified to just ON/OFF (AUTO/OFF in HomeKit terms)
+ */
+private determineTargetHeatingState(
+  thermalStatus: ThermalStatus,
+  powerState: PowerState
+): number {
+  if (powerState === PowerState.OFF || 
+      thermalStatus === ThermalStatus.OFF ||
+      thermalStatus === ThermalStatus.STANDBY) {
+    return this.Characteristic.TargetHeatingCoolingState.OFF;
+  }
+  
+  // For any active state, use AUTO mode
+  return this.Characteristic.TargetHeatingCoolingState.AUTO;
+}
+/**
+ * Map thermal status to HomeKit heating/cooling state
+ * Simplified for SleepMe's auto-mode approach
+ */
+private mapThermalStatusToHeatingState(
+  thermalStatus: ThermalStatus,
+  powerState: PowerState
+): number {
+  // If power is off, the heating state is OFF
+  if (powerState === PowerState.OFF || 
+      thermalStatus === ThermalStatus.OFF ||
+      thermalStatus === ThermalStatus.STANDBY) {
+    return this.Characteristic.CurrentHeatingCoolingState.OFF;
   }
 
-  /**
-   * Determine the target heating state from the device status
-   * Simplified to only return OFF or AUTO
-   */
-  private determineTargetHeatingState(
-    thermalStatus: ThermalStatus,
-    powerState: PowerState
-  ): number {
-    // If power is off, the target state is OFF
-    if (powerState === PowerState.OFF || 
-        thermalStatus === ThermalStatus.OFF ||
-        thermalStatus === ThermalStatus.STANDBY) {
-      return this.Characteristic.TargetHeatingCoolingState.OFF;
-    }
-    
-    // For any active state, return AUTO mode
-    return this.Characteristic.TargetHeatingCoolingState.AUTO;
+  // If explicitly heating
+  if (thermalStatus === ThermalStatus.HEATING) {
+    return this.Characteristic.CurrentHeatingCoolingState.HEAT;
   }
-
+  
+  // If explicitly cooling
+  if (thermalStatus === ThermalStatus.COOLING) {
+    return this.Characteristic.CurrentHeatingCoolingState.COOL;
+  }
+  
+  // For ACTIVE state, simply compare current and target temperatures
+  if (!isNaN(this.targetTemperature) && !isNaN(this.currentTemperature)) {
+    if (this.targetTemperature > this.currentTemperature) {
+      return this.Characteristic.CurrentHeatingCoolingState.HEAT;
+    } else if (this.targetTemperature < this.currentTemperature) {
+      return this.Characteristic.CurrentHeatingCoolingState.COOL;
+    }
+  }
+  
+  // Default if we can't determine (shouldn't happen often)
+  return this.Characteristic.CurrentHeatingCoolingState.HEAT;
+}
   /**
    * Handler for CurrentTemperature GET
    */
@@ -685,34 +679,41 @@ private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<vo
     this.targetTemperature = newTemp;
     this.lastTemperatureSetTime = Date.now();
     
-    // If device is OFF in HomeKit, just store the temperature but don't send to device
-    // The temperature will be applied when the device is turned ON
+    // If device is OFF in HomeKit, turn it on with the new temperature
     if (this.targetHeatingState === this.Characteristic.TargetHeatingCoolingState.OFF) {
       this.platform.log.info(
-        `Device is currently OFF. Temperature set to ${newTemp}°C will be applied when device is turned on.`,
+        `Turning device ON with temperature ${newTemp}°C`,
         LogContext.ACCESSORY
       );
       
-      // Update the UI with the new temperature
-      this.service.updateCharacteristic(
-        this.Characteristic.TargetTemperature,
-        this.targetTemperature
-      );
+      const success = await this.apiClient.turnDeviceOn(this.deviceId, newTemp);
+      
+      if (success) {
+        // Update the target state to AUTO
+        this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.AUTO;
+        this.service.updateCharacteristic(
+          this.Characteristic.TargetHeatingCoolingState,
+          this.targetHeatingState
+        );
+        
+        // Update current state based on temperature difference
+        this.updateHeatingState();
+      } else {
+        throw new Error('Failed to turn on the device');
+      }
       
       return;
     }
     
-    // Update the device temperature since it's on (or should be on)
+    // Update the device temperature since it's on
     const success = await this.apiClient.setTemperature(this.deviceId, newTemp);
     
     if (!success) {
       throw new Error('Failed to set temperature on the device');
     }
     
-    // Update current state based on temperature difference if we have current temperature
-    if (!isNaN(this.currentTemperature)) {
-      this.updateHeatingState();
-    }
+    // Update current state based on temperature difference
+    this.updateHeatingState();
   } catch (error) {
     this.platform.log.error(
       `Failed to set target temperature: ${error instanceof Error ? error.message : String(error)}`,
@@ -752,13 +753,11 @@ private updateHeatingState(): void {
   // Only update if we have current temperature data
   if (isNaN(this.currentTemperature)) return;
   
-  let newHeatingState = this.currentHeatingState;
-  
-  if (this.targetTemperature > this.currentTemperature + 0.5) {
-    newHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-  } else if (this.targetTemperature < this.currentTemperature - 0.5) {
-    newHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
-  }
+  // Use our mapping function to determine the appropriate state
+  const newHeatingState = this.mapThermalStatusToHeatingState(
+    ThermalStatus.ACTIVE, // Assume ACTIVE state since we're manually checking
+    PowerState.ON // Must be ON if we're updating heating state
+  );
   
   // Only update if changed
   if (newHeatingState !== this.currentHeatingState) {
