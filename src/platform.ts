@@ -48,7 +48,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   /**
    * Configuration options parsed from config.json
    */
-  public readonly logLevel: LogLevelString;
+  public readonly logLevel!: LogLevelString;
   public readonly debugMode: boolean = false;
   public readonly pollingInterval: number;
   public readonly temperatureUnit: string = 'C';
@@ -83,23 +83,27 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     this.pollingInterval = Math.max(30, Math.min(900, 
       parseInt(String(config.pollingInterval)) || DEFAULT_POLLING_INTERVAL));
 
-    // Handle log level determination
-    if (typeof config.logLevel === 'string') {
-      // Validate and type-cast the log level
-      this.logLevel = ['normal', 'debug', 'verbose', 'api_detail'].includes(config.logLevel) 
-        ? (config.logLevel as LogLevelString) 
-        : 'normal';
-    } else {
-      // Legacy configuration - check boolean flags
-      this.debugMode = config.debugMode === true;
-      const verboseLogging = config.verboseLogging === true;
-      
-      // Set log level based on legacy flags
-      this.logLevel = verboseLogging ? 'verbose' : (this.debugMode ? 'debug' : 'normal');
-    }
-    
-    // Initialize the logger with the determined log level
-    this.log = new EnhancedLogger(logger, this.logLevel, true);
+// Parse logging level from config
+let logLevelStr: LogLevelString = 'normal';
+
+// Handle modern string config
+if (typeof config.logLevel === 'string') {
+  if (['normal', 'debug', 'verbose'].includes(config.logLevel)) {
+    logLevelStr = config.logLevel as LogLevelString;
+  } else if (config.logLevel === 'api_detail') {
+    // Treat api_detail as verbose for backward compatibility
+    logLevelStr = 'verbose';
+  }
+} 
+// Handle legacy boolean configs
+else if (config.verboseLogging === true) {
+  logLevelStr = 'verbose';
+} else if (config.debugMode === true) {
+  logLevelStr = 'debug';
+}
+
+// Initialize the logger with the determined log level
+this.log = new EnhancedLogger(logger, logLevelStr, true);
     
     // Log platform initialization with full config
     this.log.verbose(
