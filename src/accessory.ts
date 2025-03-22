@@ -134,7 +134,14 @@ export class SleepMeAccessory {
   
     this.platform.log.info(`Accessory initialized: ${this.displayName} (ID: ${this.deviceId})`, LogContext.ACCESSORY);
   }
-
+/**
+ * Public method to allow manual refresh of device status
+ * Useful for forcing updates after initialization or configuration changes
+ * @param force Force a fresh update from the API even if cached data is available
+ */
+public async refreshStatus(force = false): Promise<void> {
+  return this.refreshDeviceStatus(force);
+}
   /**
    * Set up the status polling mechanism with smart interval adjustments
    * This implementation reduces API load and adapts to device state
@@ -618,24 +625,21 @@ export class SleepMeAccessory {
     this.platform.log.debug(`GET CurrentTemperature: ${temp}`, LogContext.HOMEKIT);
     return temp;
   }
-
-  /**
-   * Handler for TargetTemperature GET
-   */
-  private async handleTargetTemperatureGet(): Promise<CharacteristicValue> {
-    // Return default temperature if value is not yet initialized
-    const temp = isNaN(this.targetTemperature) ? 20 : this.targetTemperature;
-    this.platform.log.debug(`GET TargetTemperature: ${temp}`, LogContext.HOMEKIT);
-    return temp;
-  }
-
-  /**
-   * Handler for TargetTemperature SET
-   * Enhanced to respect device's current power state and reduce API calls
-   */
-  private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<void> {
-    const newTemp = this.validateTemperature(value as number);
-    this.platform.log.debug(`SET TargetTemperature: ${newTemp}°C`, LogContext.HOMEKIT);
+/**
+ * Handler for TargetTemperature GET
+ */
+private async handleTargetTemperatureGet(): Promise<CharacteristicValue> {
+  // Return default temperature if value is not yet initialized
+  const temp = isNaN(this.targetTemperature) ? 20 : this.targetTemperature;
+  this.platform.log.homekit('GET', 'TargetTemperature', temp);
+  return temp;
+}
+ /**
+ * Handler for TargetTemperature SET
+ */
+private async handleTargetTemperatureSet(value: CharacteristicValue): Promise<void> {
+  const newTemp = this.validateTemperature(value as number);
+  this.platform.log.homekit('SET', 'TargetTemperature', newTemp);
     
     try {
       // Always update the internal target temperature immediately for responsiveness
@@ -702,66 +706,65 @@ export class SleepMeAccessory {
     }
   }
 
-  /**
-   * Handler for CurrentHeatingCoolingState GET
-   */
-  private async handleCurrentHeatingStateGet(): Promise<CharacteristicValue> {
-    // Create state name string for logging
-    let stateString = 'UNKNOWN';
-    switch (this.currentHeatingState) {
-      case this.Characteristic.CurrentHeatingCoolingState.OFF:
-        stateString = 'OFF';
-        break;
-      case this.Characteristic.CurrentHeatingCoolingState.HEAT:
-        stateString = 'HEAT';
-        break;
-      case this.Characteristic.CurrentHeatingCoolingState.COOL:
-        stateString = 'COOL';
-        break;
-    }
-    
-    this.platform.log.debug(`GET CurrentHeatingCoolingState: ${stateString}`, LogContext.HOMEKIT);
-    return this.currentHeatingState;
+/**
+ * Handler for CurrentHeatingCoolingState GET
+ */
+private async handleCurrentHeatingStateGet(): Promise<CharacteristicValue> {
+  // Create state name string for logging
+  let stateString = 'UNKNOWN';
+  switch (this.currentHeatingState) {
+    case this.Characteristic.CurrentHeatingCoolingState.OFF:
+      stateString = 'OFF';
+      break;
+    case this.Characteristic.CurrentHeatingCoolingState.HEAT:
+      stateString = 'HEAT';
+      break;
+    case this.Characteristic.CurrentHeatingCoolingState.COOL:
+      stateString = 'COOL';
+      break;
   }
+  
+  this.platform.log.homekit('GET', 'CurrentHeatingCoolingState', stateString);
+  return this.currentHeatingState;
+}
 
-  /**
-   * Handler for TargetHeatingCoolingState GET
-   */
-  private async handleTargetHeatingStateGet(): Promise<CharacteristicValue> {
-    // Create state name string for logging
-    let stateString = 'UNKNOWN';
-    switch (this.targetHeatingState) {
-      case this.Characteristic.TargetHeatingCoolingState.OFF:
-        stateString = 'OFF';
-        break;
-      case this.Characteristic.TargetHeatingCoolingState.AUTO:
-        stateString = 'AUTO';
-        break;
-    }
-    
-    this.platform.log.debug(`GET TargetHeatingCoolingState: ${stateString}`, LogContext.HOMEKIT);
-    return this.targetHeatingState;
+/**
+ * Handler for TargetHeatingCoolingState GET
+ */
+private async handleTargetHeatingStateGet(): Promise<CharacteristicValue> {
+  // Create state name string for logging
+  let stateString = 'UNKNOWN';
+  switch (this.targetHeatingState) {
+    case this.Characteristic.TargetHeatingCoolingState.OFF:
+      stateString = 'OFF';
+      break;
+    case this.Characteristic.TargetHeatingCoolingState.AUTO:
+      stateString = 'AUTO';
+      break;
   }
+  
+  this.platform.log.homekit('GET', 'TargetHeatingCoolingState', stateString);
+  return this.targetHeatingState;
+}
 
-  /**
-   * Handler for TargetHeatingCoolingState SET
-   * Enhanced to reduce API calls and optimistically update UI state
-   */
-  private async handleTargetHeatingStateSet(value: CharacteristicValue): Promise<void> {
-    const newState = value as number;
-    
-    // Create state name string for logging
-    let stateString = 'UNKNOWN';
-    switch (newState) {
-      case this.Characteristic.TargetHeatingCoolingState.OFF:
-        stateString = 'OFF';
-        break;
-      case this.Characteristic.TargetHeatingCoolingState.AUTO:
-        stateString = 'AUTO';
-        break;
-    }
-    
-    this.platform.log.debug(`SET TargetHeatingCoolingState: ${stateString}`, LogContext.HOMEKIT);
+/**
+ * Handler for TargetHeatingCoolingState SET
+ */
+private async handleTargetHeatingStateSet(value: CharacteristicValue): Promise<void> {
+  const newState = value as number;
+  
+  // Create state name string for logging
+  let stateString = 'UNKNOWN';
+  switch (newState) {
+    case this.Characteristic.TargetHeatingCoolingState.OFF:
+      stateString = 'OFF';
+      break;
+    case this.Characteristic.TargetHeatingCoolingState.AUTO:
+      stateString = 'AUTO';
+      break;
+  }
+  
+  this.platform.log.homekit('SET', 'TargetHeatingCoolingState', stateString);
     
     try {
       // Skip the API call if the state isn't changing

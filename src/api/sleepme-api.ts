@@ -164,49 +164,63 @@ export class SleepMeApi {
       this.logger.debug(`Cleaned up ${expiredCount} expired cache entries`, LogContext.API);
     }
   }
-  
   /**
-   * Get devices from the SleepMe API
-   * @returns Array of devices or empty array if error
-   */
-  public async getDevices(): Promise<Device[]> {
-    try {
-      this.logger.debug('Fetching devices...', LogContext.API);
-      
-      const response = await this.makeRequest<Device[] | { devices: Device[] }>({
-        method: 'GET',
-        url: '/devices',
-        priority: RequestPriority.HIGH, // Device discovery is a high priority operation
-        operationType: 'getDevices'
-      });
-      
-      // Handle different API response formats
-      let devices: Device[];
-      if (Array.isArray(response)) {
-        devices = response;
-      } else if (response && typeof response === 'object' && 'devices' in response) {
-        devices = response.devices;
-      } else {
-        this.logger.error('Unexpected API response format for devices', LogContext.API);
-        return [];
-      }
-      
-      // Validate and filter devices
-      const validDevices = devices.filter(device => {
-        if (!device.id) {
-          this.logger.warn(`Found device without ID: ${JSON.stringify(device)}`, LogContext.API);
-          return false;
-        }
-        return true;
-      });
-      
-      this.logger.info(`Found ${validDevices.length} devices`, LogContext.API);
-      return validDevices;
-    } catch (error) {
-      this.handleApiError('getDevices', error);
+ * Get devices from the SleepMe API
+ * @returns Array of devices or empty array if error
+ */
+public async getDevices(): Promise<Device[]> {
+  try {
+    this.logger.debug('Fetching devices...', LogContext.API);
+    
+    const response = await this.makeRequest<Device[] | { devices: Device[] }>({
+      method: 'GET',
+      url: '/devices',
+      priority: RequestPriority.HIGH, // Device discovery is a high priority operation
+      operationType: 'getDevices'
+    });
+    
+    // Handle different API response formats
+    let devices: Device[];
+    if (Array.isArray(response)) {
+      devices = response;
+    } else if (response && typeof response === 'object' && 'devices' in response) {
+      devices = response.devices;
+    } else {
+      // Log the actual response for debugging
+      this.logger.error(`Unexpected API response format: ${JSON.stringify(response)}`, LogContext.API);
       return [];
     }
+    
+    // Validate and filter devices
+    const validDevices = devices.filter(device => {
+      if (!device.id) {
+        this.logger.warn(`Found device without ID: ${JSON.stringify(device)}`, LogContext.API);
+        return false;
+      }
+      return true;
+    });
+    
+    // Log the device count and IDs for better debugging
+    this.logger.info(`Found ${validDevices.length} devices: ${validDevices.map(d => d.id).join(', ')}`, LogContext.API);
+    return validDevices;
+  } catch (error) {
+    // Enhanced error handling
+    if (axios.isAxiosError(error)) {
+      this.logger.error(
+        `API error in getDevices: ${error.message} (Status: ${error.response?.status || 'unknown'})`,
+        LogContext.API
+      );
+      
+      if (error.response?.data) {
+        this.logger.debug(`Error response data: ${JSON.stringify(error.response.data)}`, LogContext.API);
+      }
+    } else {
+      this.logger.error(`Error in getDevices: ${error instanceof Error ? error.message : String(error)}`, LogContext.API);
+    }
+    return [];
   }
+}
+ 
   /**
  * Get status for multiple devices in a batched request
  * @param deviceIds Array of device identifiers

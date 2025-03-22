@@ -161,17 +161,18 @@ export class EnhancedLogger {
     }
   }
   
-  /**
-   * Log a HomeKit interaction
-   */
-  public homekit(action: string, characteristic: string, value?: any): void {
-    if (this.logLevel >= LogLevel.DEBUG) {
-      const message = `HomeKit ${action}: ${characteristic}` + 
-        (value !== undefined ? ` → ${JSON.stringify(value)}` : '');
-      
-      this.debug(message, LogContext.HOMEKIT);
-    }
+ /**
+ * Log a HomeKit interaction
+ * Provides consistent format for tracking HomeKit characteristic operations
+ */
+public homekit(action: string, characteristic: string, value?: any): void {
+  if (this.logLevel >= LogLevel.DEBUG) {
+    const message = `HomeKit ${action}: ${characteristic}` + 
+      (value !== undefined ? ` → ${value}` : '');
+    
+    this.debug(message, LogContext.HOMEKIT);
   }
+}
   
   /**
    * Log an API request or response

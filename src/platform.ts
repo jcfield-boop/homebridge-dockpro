@@ -23,6 +23,8 @@ import { SleepMeAccessory } from './accessory.js';
 import { SleepMeScheduler, DeviceSchedule, ScheduledEvent } from './scheduler.js';
 import { EnhancedLogger, LogContext, LogLevelString } from './utils/logger.js';
 import { PLATFORM_NAME, PLUGIN_NAME, DEFAULT_POLLING_INTERVAL } from './settings.js';
+import axios from 'axios';
+import { API_BASE_URL } from './settings.js';
 
 /**
  * SleepMe Platform
@@ -222,6 +224,7 @@ this.pollingInterval = Math.max(120, Math.min(900,
             'No SleepMe devices found. Check your API token and connectivity.',
             LogContext.PLATFORM
           );
+          this.testApiConnection();
           return;
         }
       }
@@ -272,7 +275,9 @@ this.pollingInterval = Math.max(120, Math.min(900,
             existingAccessory.displayName = displayName;
             this.log.debug(`Updated accessory name to: ${displayName}`, LogContext.PLATFORM);
           }
-          
+          // After device validation, add this log
+this.log.info(`Successfully found ${devices.length} devices to initialize`, LogContext.PLATFORM);
+
           // Update platform accessories in Homebridge
           this.homebridgeApi.updatePlatformAccessories([existingAccessory]);
           
@@ -311,7 +316,40 @@ this.pollingInterval = Math.max(120, Math.min(900,
       );
     }
   }
-  
+  /**
+ * Test the API connection by making a minimal request
+ * Helps diagnose connectivity issues during startup
+ */
+private async testApiConnection(): Promise<void> {
+  this.log.info('Testing API connection...', LogContext.PLATFORM);
+  try {
+    // Make a direct request to the API using axios to bypass our queueing
+    const response = await axios.get(`${API_BASE_URL}/devices`, {
+      headers: {
+        'Authorization': `Bearer ${this.config.apiToken}`
+      },
+      timeout: 10000 // 10 second timeout
+    });
+    
+    this.log.info(
+      `API test success: Status ${response.status}, found ${Array.isArray(response.data) ? response.data.length : 'unknown'} devices`,
+      LogContext.PLATFORM
+    );
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      this.log.error(
+        `API test failed: ${error.message}, Status: ${error.response?.status || 'unknown'}, ` +
+        `Data: ${JSON.stringify(error.response?.data || {})}`,
+        LogContext.PLATFORM
+      );
+    } else {
+      this.log.error(
+        `API test error: ${error instanceof Error ? error.message : String(error)}`,
+        LogContext.PLATFORM
+      );
+    }
+  }
+}
   /**
    * Initialize an accessory with its handler
    * Handles connecting scheduler events to the accessory
@@ -319,32 +357,62 @@ this.pollingInterval = Math.max(120, Math.min(900,
    * @param accessory - The platform accessory to initialize
    * @param deviceId - The device ID for this accessory
    */
-  private initializeAccessory(accessory: PlatformAccessory, deviceId: string): void {
-    this.log.info(`Initializing accessory for device ID: ${deviceId}`, LogContext.PLATFORM);
-    
-    // First, remove any existing handler for this accessory
-    const existingHandler = this.accessoryInstances.get(deviceId);
-    if (existingHandler) {
-      existingHandler.cleanup();
-      this.accessoryInstances.delete(deviceId);
-      
-      // Add a small delay before creating the new handler
-      setTimeout(() => {
-        this.createAccessoryHandler(accessory, deviceId);
-      }, 5000);
-    } else {
-      // Create handler immediately if no existing one
-      this.createAccessoryHandler(accessory, deviceId);
-    }
-  }
+/**
+ * Initialize an accessory with its handler
+ * Handles connecting scheduler events to the accessory
+ * 
+ * @param accessory - The platform accessory to initialize
+ * @param deviceId - The device ID for this accessory
+ */
+private initializeAccessory(accessory: PlatformAccessory, deviceId: string): void {
+  this.log.info(`Initializing accessory for device ID: ${deviceId}`, LogContext.PLATFORM);
   
+  // First, remove any existing handler for this accessory
+  const existingHandler = this.accessoryInstances.get(deviceId);
+  if (existingHandler) {
+    existingHandler.cleanup();
+    this.accessoryInstances.delete(deviceId);
+    
+    // Add a small delay before creating the new handler
+    setTimeout(() => {
+      this.createAccessoryHandler(accessory, deviceId);
+      
+      // Trigger an initial refresh after a short delay
+      setTimeout(() => {
+        const handler = this.accessoryInstances.get(deviceId);
+        if (handler) {
+          this.log.info(`Triggering initial refresh for device ${deviceId}`, LogContext.PLATFORM);
+          handler.refreshStatus(true).catch(err => 
+            this.log.error(`Initial status refresh failed: ${err}`, LogContext.ACCESSORY)
+          );
+        }
+      }, 2000); // 2 second delay before initial refresh
+    }, 5000);
+  } else {
+    // Create handler immediately if no existing one
+    this.createAccessoryHandler(accessory, deviceId);
+    
+    // Trigger an initial refresh after a short delay
+    setTimeout(() => {
+      const handler = this.accessoryInstances.get(deviceId);
+      if (handler) {
+        this.log.info(`Triggering initial refresh for device ${deviceId}`, LogContext.PLATFORM);
+        handler.refreshStatus(true).catch(err => 
+          this.log.error(`Initial status refresh failed: ${err}`, LogContext.ACCESSORY)
+        );
+      }
+    }, 2000); // 2 second delay before initial refresh
+  }
+}
   /**
-   * Create a new accessory handler
-   * 
-   * @param accessory - The platform accessory to create a handler for
-   * @param deviceId - The device ID for this accessory
-   */
-  private createAccessoryHandler(accessory: PlatformAccessory, deviceId: string): void {
+ * Create a new accessory handler
+ * @param accessory - The platform accessory to create a handler for
+ * @param deviceId - The device ID for this accessory
+ */
+private createAccessoryHandler(accessory: PlatformAccessory, deviceId: string): void {
+  try {
+    this.log.info(`Creating accessory handler for device ${deviceId}`, LogContext.PLATFORM);
+    
     // Create new accessory handler
     const handler = new SleepMeAccessory(this, accessory, this.api);
     
@@ -357,8 +425,16 @@ this.pollingInterval = Math.max(120, Math.min(900,
     
     // Store the handler for later cleanup
     this.accessoryInstances.set(deviceId, handler);
+    
+    this.log.info(`Successfully initialized accessory for device ${deviceId}`, LogContext.PLATFORM);
+  } catch (error) {
+    this.log.error(
+      `Error creating accessory handler: ${error instanceof Error ? error.message : String(error)}`,
+      LogContext.PLATFORM
+    );
   }
-  
+}
+
   /**
    * Clean up accessories that are no longer active
    * Removes accessories from Homebridge that don't match active device IDs
