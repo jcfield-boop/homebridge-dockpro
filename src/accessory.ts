@@ -20,9 +20,9 @@ export class SleepMeAccessory {
   private informationService: Service;
   private waterLevelService?: Service;
   
-  // Device state
-  private currentTemperature = 21; // Default value
-  private targetTemperature = 21;  // Default value
+  // Device state - initialize with NaN to indicate uninitialized state
+  private currentTemperature = NaN;
+  private targetTemperature = NaN;
   private currentHeatingState = 0; // OFF
   private targetHeatingState = 3;  // AUTO - Initialize to AUTO mode
   private firmwareVersion = 'Unknown';
@@ -392,7 +392,7 @@ export class SleepMeAccessory {
           
           // Always update current temperature regardless of device state
           // This ensures temperature is displayed even when device is off
-          if (status.currentTemperature !== this.currentTemperature) {
+          if (isNaN(this.currentTemperature) || status.currentTemperature !== this.currentTemperature) {
             this.currentTemperature = status.currentTemperature;
             this.service.updateCharacteristic(
               this.Characteristic.CurrentTemperature,
@@ -402,7 +402,7 @@ export class SleepMeAccessory {
           
           // CRITICAL CHANGE: Always update target temperature to match actual device target
           // This ensures HomeKit doesn't try to "correct" temperature changes made elsewhere
-          if (status.targetTemperature !== this.targetTemperature) {
+          if (isNaN(this.targetTemperature) || status.targetTemperature !== this.targetTemperature) {
             this.targetTemperature = status.targetTemperature;
             this.service.updateCharacteristic(
               this.Characteristic.TargetTemperature,
@@ -547,14 +547,15 @@ export class SleepMeAccessory {
       case ThermalStatus.ACTIVE: {
         // For an active but not specifically heating/cooling state,
         // determine based on target vs current temperature
-        if (this.targetTemperature > this.currentTemperature + 0.5) {
-          return this.Characteristic.CurrentHeatingCoolingState.HEAT;
-        } else if (this.targetTemperature < this.currentTemperature - 0.5) {
-          return this.Characteristic.CurrentHeatingCoolingState.COOL;
-        } else {
-          // When temperatures are close, default to HEAT (or last state)
-          return this.currentHeatingState || this.Characteristic.CurrentHeatingCoolingState.HEAT;
+        if (!isNaN(this.targetTemperature) && !isNaN(this.currentTemperature)) {
+          if (this.targetTemperature > this.currentTemperature + 0.5) {
+            return this.Characteristic.CurrentHeatingCoolingState.HEAT;
+          } else if (this.targetTemperature < this.currentTemperature - 0.5) {
+            return this.Characteristic.CurrentHeatingCoolingState.COOL;
+          }
         }
+        // When temperatures are close or undefined, default to HEAT (or last state)
+        return this.currentHeatingState || this.Characteristic.CurrentHeatingCoolingState.HEAT;
       }
       case ThermalStatus.STANDBY:
       case ThermalStatus.OFF:
@@ -588,16 +589,20 @@ export class SleepMeAccessory {
    * Handler for CurrentTemperature GET
    */
   private async handleCurrentTemperatureGet(): Promise<CharacteristicValue> {
-    this.platform.log.debug(`GET CurrentTemperature: ${this.currentTemperature}`, LogContext.HOMEKIT);
-    return this.currentTemperature;
+    // Return default temperature if value is not yet initialized
+    const temp = isNaN(this.currentTemperature) ? 20 : this.currentTemperature;
+    this.platform.log.debug(`GET CurrentTemperature: ${temp}`, LogContext.HOMEKIT);
+    return temp;
   }
 
   /**
    * Handler for TargetTemperature GET
    */
   private async handleTargetTemperatureGet(): Promise<CharacteristicValue> {
-    this.platform.log.debug(`GET TargetTemperature: ${this.targetTemperature}`, LogContext.HOMEKIT);
-    return this.targetTemperature;
+    // Return default temperature if value is not yet initialized
+    const temp = isNaN(this.targetTemperature) ? 20 : this.targetTemperature;
+    this.platform.log.debug(`GET TargetTemperature: ${temp}`, LogContext.HOMEKIT);
+    return temp;
   }
 
   /**
@@ -661,36 +666,40 @@ export class SleepMeAccessory {
         );
         
         // Update current state in HomeKit based on temperatures
-        if (newTemp > this.currentTemperature + 0.5) {
-          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-        } else if (newTemp < this.currentTemperature - 0.5) {
-          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
-        } else {
-          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+        if (!isNaN(this.currentTemperature)) {
+          if (newTemp > this.currentTemperature + 0.5) {
+            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+          } else if (newTemp < this.currentTemperature - 0.5) {
+            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+          } else {
+            this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+          }
+          
+          this.service.updateCharacteristic(
+            this.Characteristic.CurrentHeatingCoolingState,
+            this.currentHeatingState
+          );
         }
-        
-        this.service.updateCharacteristic(
-          this.Characteristic.CurrentHeatingCoolingState,
-          this.currentHeatingState
-        );
       }
       
       // Update the device temperature since it's on
       await this.apiClient.setTemperature(this.deviceId, newTemp);
       
       // Update current state based on temperature difference
-      if (newTemp > this.currentTemperature + 0.5) {
-        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-        this.service.updateCharacteristic(
-          this.Characteristic.CurrentHeatingCoolingState,
-          this.currentHeatingState
-        );
-      } else if (newTemp < this.currentTemperature - 0.5) {
-        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
-        this.service.updateCharacteristic(
-          this.Characteristic.CurrentHeatingCoolingState,
-          this.currentHeatingState
-        );
+      if (!isNaN(this.currentTemperature)) {
+        if (newTemp > this.currentTemperature + 0.5) {
+          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+          this.service.updateCharacteristic(
+            this.Characteristic.CurrentHeatingCoolingState,
+            this.currentHeatingState
+          );
+        } else if (newTemp < this.currentTemperature - 0.5) {
+          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+          this.service.updateCharacteristic(
+            this.Characteristic.CurrentHeatingCoolingState,
+            this.currentHeatingState
+          );
+        }
       }
       
       // Refresh the device status after a short delay to confirm changes
@@ -829,23 +838,31 @@ export class SleepMeAccessory {
           break;
         }
         case this.Characteristic.TargetHeatingCoolingState.AUTO: {
+          // Use the current target temperature or a reasonable default if it's not yet initialized
+          const tempToUse = !isNaN(this.targetTemperature) ? this.targetTemperature : 21;
+          
           // Turn on in auto mode with current target temperature
-          success = await this.apiClient.turnDeviceOn(this.deviceId, this.targetTemperature);
+          success = await this.apiClient.turnDeviceOn(this.deviceId, tempToUse);
           
           if (success) {
             // Update internal states
             this.targetHeatingState = newState;
             
             // Determine current heating/cooling state based on temperature difference
-            if (this.targetTemperature > this.currentTemperature + 0.5) {
-              this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-            } else if (this.targetTemperature < this.currentTemperature - 0.5) {
-              this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+            if (!isNaN(this.currentTemperature)) {
+              if (tempToUse > this.currentTemperature + 0.5) {
+                this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+              } else if (tempToUse < this.currentTemperature - 0.5) {
+                this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+              } else {
+                // When temperatures are close, use the last non-OFF state or default to HEAT
+                this.currentHeatingState = 
+                  (this.currentHeatingState !== this.Characteristic.CurrentHeatingCoolingState.OFF) ? 
+                  this.currentHeatingState : this.Characteristic.CurrentHeatingCoolingState.HEAT;
+              }
             } else {
-              // When temperatures are close, use the last non-OFF state or default to HEAT
-              this.currentHeatingState = 
-                (this.currentHeatingState !== this.Characteristic.CurrentHeatingCoolingState.OFF) ? 
-                this.currentHeatingState : this.Characteristic.CurrentHeatingCoolingState.HEAT;
+              // No current temperature yet, default to HEAT
+              this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
             }
             
             // Update HomeKit characteristic
@@ -889,10 +906,10 @@ export class SleepMeAccessory {
   private validateTemperature(temperature: number): number {
     if (typeof temperature !== 'number' || isNaN(temperature)) {
       this.platform.log.warn(
-        `Invalid temperature value: ${temperature}, using current target ${this.targetTemperature}°C`,
+        `Invalid temperature value: ${temperature}, using default 21°C`,
         LogContext.ACCESSORY
       );
-      return this.targetTemperature;
+      return 21; // Return reasonable default if invalid
     }
     
     // Constrain to valid range - properly referencing MIN_TEMPERATURE_C from settings.ts
@@ -937,11 +954,16 @@ export class SleepMeAccessory {
       this.targetHeatingState = this.Characteristic.TargetHeatingCoolingState.AUTO;
       
       // Update current heating state based on temperature difference
-      if (this.targetTemperature > this.currentTemperature + 0.5) {
-        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
-      } else if (this.targetTemperature < this.currentTemperature - 0.5) {
-        this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+      if (!isNaN(this.currentTemperature)) {
+        if (this.targetTemperature > this.currentTemperature + 0.5) {
+          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+        } else if (this.targetTemperature < this.currentTemperature - 0.5) {
+          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.COOL;
+        } else {
+          this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
+        }
       } else {
+        // Default to HEAT if no current temperature
         this.currentHeatingState = this.Characteristic.CurrentHeatingCoolingState.HEAT;
       }
     } else {

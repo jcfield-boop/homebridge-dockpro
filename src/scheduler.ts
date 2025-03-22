@@ -94,49 +94,90 @@ constructor(
     this.logger.info('Initializing SleepMe scheduler', LogContext.SCHEDULER);
     this.loadSchedules();
   }
- /**
- * Load all schedules from persistent storage
- */
- private loadSchedules(): void {
-  try {
-    const dataPath = path.join(this.storagePath, 'sleepme-schedules.json');
-    
-    if (!fs.existsSync(dataPath)) {
-      this.logger.info('No existing schedules found, starting with empty schedules', LogContext.SCHEDULER);
-      return;
+ 
+  /**
+   * Load all schedules from persistent storage
+   */
+  private loadSchedules(): void {
+    try {
+      const dataPath = path.join(this.storagePath, 'sleepme-schedules.json');
+      
+      if (!fs.existsSync(dataPath)) {
+        this.logger.info('No existing schedules found, starting with empty schedules', LogContext.SCHEDULER);
+        return;
+      }
+      
+      const data = fs.readFileSync(dataPath, 'utf8');
+      const schedules = JSON.parse(data) as Record<string, DeviceSchedule>;
+      
+      // Track invalid schedules that need to be cleaned up
+      const invalidScheduleIds: string[] = [];
+      
+      // Convert to Map for easier access - with enhanced validation
+      Object.values(schedules).forEach(schedule => {
+        // Enhanced validation to detect invalid deviceIds
+        if (typeof schedule.deviceId === 'string' && 
+            schedule.deviceId.trim() !== '' && 
+            !['true', 'false', 'undefined', 'null'].includes(schedule.deviceId) && 
+            /^zx-[a-z0-9]+$/.test(schedule.deviceId)) {
+          
+          this.schedules.set(schedule.deviceId, schedule);
+        } else {
+          // Log the invalid schedule for cleanup
+          this.logger.warn(
+            `Found invalid schedule with deviceId: ${schedule.deviceId}`,
+            LogContext.SCHEDULER
+          );
+          
+          invalidScheduleIds.push(schedule.deviceId);
+        }
+      });
+      
+      this.logger.info(`Loaded ${this.schedules.size} device schedules from storage`, LogContext.SCHEDULER);
+      
+      // Clean up invalid schedules if any were found
+      if (invalidScheduleIds.length > 0) {
+        try {
+          // Remove invalid schedules from storage
+          invalidScheduleIds.forEach(id => {
+            if (schedules[id]) {
+              delete schedules[id];
+            }
+          });
+          
+          // Save the cleaned up schedules
+          fs.writeFileSync(
+            dataPath,
+            JSON.stringify(schedules, null, 2),
+            'utf8'
+          );
+          
+          this.logger.info(
+            `Cleaned up ${invalidScheduleIds.length} invalid schedules from storage`,
+            LogContext.SCHEDULER
+          );
+        } catch (cleanupError) {
+          this.logger.error(
+            `Failed to clean up invalid schedules: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+            LogContext.SCHEDULER
+          );
+        }
+      }
+      
+      // Activate all enabled schedules
+      this.schedules.forEach(schedule => {
+        if (schedule.enabled) {
+          this.activateSchedule(schedule.deviceId);
+        }
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to load schedules: ${error instanceof Error ? error.message : String(error)}`,
+        LogContext.SCHEDULER
+      );
     }
-    
-    const data = fs.readFileSync(dataPath, 'utf8');
-    const schedules = JSON.parse(data) as Record<string, DeviceSchedule>;
-    
-    // Convert to Map for easier access - with validation
-    Object.values(schedules).forEach(schedule => {
-      // Validate deviceId is a proper string
-      if (typeof schedule.deviceId === 'string' && schedule.deviceId.trim() !== '') {
-        this.schedules.set(schedule.deviceId, schedule);
-      } else {
-        this.logger.warn(
-          `Skipping invalid schedule with non-string deviceId: ${typeof schedule.deviceId}`,
-          LogContext.SCHEDULER
-        );
-      }
-    });
-    
-    this.logger.info(`Loaded ${this.schedules.size} device schedules from storage`, LogContext.SCHEDULER);
-    
-    // Activate all enabled schedules
-    this.schedules.forEach(schedule => {
-      if (schedule.enabled) {
-        this.activateSchedule(schedule.deviceId);
-      }
-    });
-  } catch (error) {
-    this.logger.error(
-      `Failed to load schedules: ${error instanceof Error ? error.message : String(error)}`,
-      LogContext.SCHEDULER
-    );
   }
-}
+
   /**
    * Save all schedules to persistent storage
    */
@@ -405,11 +446,11 @@ constructor(
    * Activate the schedule for a device
    */
   private activateSchedule(deviceId: string): void {
-   // Validate deviceId is a string
-  if (typeof deviceId !== 'string' || deviceId.trim() === '') {
-    this.logger.error(`Invalid device ID for activation: ${deviceId}`, LogContext.SCHEDULER);
-    return;
-  }
+    // Validate deviceId is a string
+    if (typeof deviceId !== 'string' || deviceId.trim() === '') {
+      this.logger.error(`Invalid device ID for activation: ${deviceId}`, LogContext.SCHEDULER);
+      return;
+    }
     // Get device schedule
     const schedule = this.schedules.get(deviceId);
     if (!schedule || !schedule.enabled || schedule.events.length === 0) {
@@ -804,4 +845,5 @@ constructor(
     this.warmHugTimers.clear();
     this.activeWarmHugs.clear();
     this.nextEvents.clear();
-  }}
+  }
+}
