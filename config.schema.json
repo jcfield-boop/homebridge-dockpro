@@ -30,7 +30,8 @@
       "enableScheduling": {
         "title": "Enable Scheduling",
         "type": "boolean",
-        "default": false
+        "default": false,
+        "description": "Enable temperature scheduling features for your SleepMe devices"
       },
       "devices": {
         "title": "Device Configuration",
@@ -131,7 +132,7 @@
         "default": "normal",
         "enum": ["normal", "debug", "verbose"],
         "enumNames": ["Normal", "Debug", "Verbose"],
-        "description": "Controls the detail level of plugin logs. Normal for basic operation, Debug for troubleshooting, Verbose for detailed API communication."
+        "description": "Controls the detail level of plugin logs. Normal provides basic operation info, Debug adds detailed state information useful for troubleshooting, and Verbose includes all API communication details."
       }
     },
     "required": ["apiToken", "unit"]
@@ -194,7 +195,7 @@
           "key": "logLevel",
           "type": "select",
           "title": "Logging Level",
-          "description": "Controls how much detail appears in logs"
+          "description": "Normal: Basic operation info only. Debug: Adds device state details and HomeKit interactions. Verbose: Includes all API requests, responses, and detailed scheduling information."
         }
       ]
     }
