@@ -46,6 +46,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   public readonly log: EnhancedLogger;
   
   // Configuration options parsed from config.json
+  public readonly logLevel: string;
   public readonly debugMode: boolean;
   public readonly pollingInterval: number;
   public readonly temperatureUnit: string;
@@ -79,13 +80,19 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     // Set polling interval with minimum and maximum bounds for safety
     this.pollingInterval = Math.max(120, Math.min(900, 
       parseInt(String(config.pollingInterval)) || DEFAULT_POLLING_INTERVAL));
+   // Set debug and verbose mode flags from configuration
+this.debugMode = config.debugMode === true;
+const verboseLogging = config.verboseLogging === true;
+
+// Add this line to capture the new property
+this.logLevel = config.logLevel || (verboseLogging ? 'verbose' : (this.debugMode ? 'debug' : 'normal'));
     
-    // Set debug and verbose mode flags from configuration
-    this.debugMode = config.debugMode === true;
-    const verboseLogging = config.verboseLogging === true;
-    
-    // Initialize enhanced logger with appropriate verbosity settings
-    this.log = new EnhancedLogger(logger, this.debugMode, true, verboseLogging);
+// New initialization with better backwards compatibility
+this.log = new EnhancedLogger(
+  logger,
+  config.logLevel || { debugMode: this.debugMode, verboseLogging: config.verboseLogging === true },
+  true // Keep timestamps enabled
+);
     
     // Validate that the API token is present in the configuration
     if (!config.apiToken) {
