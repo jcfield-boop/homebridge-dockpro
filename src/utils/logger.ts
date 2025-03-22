@@ -24,7 +24,8 @@ export enum LogLevel {
   WARN = 1,
   INFO = 2,
   DEBUG = 3,
-  VERBOSE = 4
+  VERBOSE = 4,
+  API_DETAIL = 5
 }
 
 /**
@@ -158,31 +159,39 @@ export class EnhancedLogger {
     }
   }
   
-  /**
-   * Log an API request or response
-   */
-  public api(method: string, endpoint: string, status?: number, data?: any): void {
-    // Always log completed requests (with status)
-    if (status) {
+/**
+ * Log an API request or response
+ */
+public api(method: string, endpoint: string, status?: number, data?: any): void {
+  // Always log completed requests (with status)
+  if (status) {
       const message = `${method} ${endpoint} (Status: ${status})`;
-      this.debug(message, LogContext.API);
+      this.info(message, LogContext.API);
       
-      // Only log data at verbose level
+      // Only log data at verbose level or higher
       if (data && this.logLevel >= LogLevel.VERBOSE) {
-        try {
-          this.verbose(`${method} ${endpoint} data: ${JSON.stringify(data)}`, LogContext.API);
-        } catch {
-          this.verbose(`${method} ${endpoint} data: [Cannot stringify data]`, LogContext.API);
-        }
+          try {
+              this.verbose(`${method} ${endpoint} data: ${JSON.stringify(data)}`, LogContext.API);
+          } catch {
+              this.verbose(`${method} ${endpoint} data: [Cannot stringify data]`, LogContext.API);
+          }
       }
-    } else {
-      // Starting requests only logged at debug level
-      if (this.logLevel >= LogLevel.DEBUG) {
-        this.debug(`${method} ${endpoint}`, LogContext.API);
+  } else {
+      // Starting requests logged at info level
+      if (this.logLevel >= LogLevel.INFO) {
+          this.info(`${method} ${endpoint}`, LogContext.API);
       }
-    }
   }
-  
+}
+  /**
+ * Log API wait/throttling information
+ * Only logs at API_DETAIL level to reduce noise
+ */
+public apiWait(message: string): void {
+  if (this.logLevel >= LogLevel.API_DETAIL) {
+      this.debug(`Wait: ${message}`, LogContext.API);
+  }
+}
   /**
    * Log accessory state
    */

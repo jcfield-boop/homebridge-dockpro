@@ -41,16 +41,16 @@ export const TEMPERATURE_STEP = 0.5;
  * Minimum time between API requests in milliseconds
  * Significantly increased to prevent rate limiting
  */
-export const MIN_REQUEST_INTERVAL = 10000; // 10 seconds
+export const MIN_REQUEST_INTERVAL = 5000; // 5 seconds
 
 /**
  * Maximum API requests per minute (to respect rate limits)
  * Reduced to be more conservative and avoid rate limiting
  */
-export const MAX_REQUESTS_PER_MINUTE = 4; // More conservative limit
+export const MAX_REQUESTS_PER_MINUTE = 8; // published limit is 10 - so safety margin
 
 /**
  * Default cache validity period in milliseconds
  * Increased to reduce API requests for status checks
  */
-export const DEFAULT_CACHE_VALIDITY_MS = 180000; // 3 minutes
+export const DEFAULT_CACHE_VALIDITY_MS = 90000; // 90 seconds

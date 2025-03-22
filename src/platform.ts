@@ -87,10 +87,10 @@ const verboseLogging = config.verboseLogging === true;
 // Add this line to capture the new property
 this.logLevel = config.logLevel || (verboseLogging ? 'verbose' : (this.debugMode ? 'debug' : 'normal'));
     
-// New initialization with better backwards compatibility
+// Update this section in the constructor
 this.log = new EnhancedLogger(
   logger,
-  config.logLevel || { debugMode: this.debugMode, verboseLogging: config.verboseLogging === true },
+  this.logLevel, // Use the logLevel property directly
   true // Keep timestamps enabled
 );
     
