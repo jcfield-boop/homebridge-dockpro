@@ -61,14 +61,15 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     
     // Set polling interval with proper validation
     // Use a longer interval by default to reduce API calls
-    this.pollingInterval = Math.max(60, Math.min(600, 
+    this.pollingInterval = Math.max(120, Math.min(900, 
       parseInt(String(config.pollingInterval)) || DEFAULT_POLLING_INTERVAL));
     
-    // Set debug mode
+    // Set debug and verbose mode
     this.debugMode = config.debugMode === true;
+    const verboseLogging = config.verboseLogging === true;
     
-    // Set up enhanced logger with correct debug mode
-    this.log = new EnhancedLogger(logger, this.debugMode);
+    // Set up enhanced logger with correct debug mode and verbosity
+    this.log = new EnhancedLogger(logger, this.debugMode, true, verboseLogging);
     
     // Validate API token
     if (!config.apiToken) {
@@ -99,10 +100,10 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
         this.log.info('Homebridge finished launching, starting device discovery', LogContext.PLATFORM);
         this.discoverDevices();
         
-        // Further delay schedule initialization
+        // Further delay schedule initialization with a longer timeout
         setTimeout(() => {
           this.initializeSchedules();
-        }, 30000);
+        }, 60000); // Increased to 60 seconds
       }, 15000); // 15 second delay before starting discovery
       
       // Set up periodic discovery to catch new or changed devices
