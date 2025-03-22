@@ -1,7 +1,13 @@
 /**
  * SleepMe Homebridge Platform
  * This is the main platform implementation that handles device discovery
- * and accessory management
+ * and accessory management for SleepMe devices like ChiliPad, OOLER, and Dock Pro.
+ * 
+ * The platform serves as the central orchestrator, managing:
+ * - Initial discovery of devices from the SleepMe API
+ * - Creation and registration of HomeKit accessories
+ * - Scheduling features for temperature control
+ * - API communication and error handling
  */
 import {
   API,
@@ -20,90 +26,103 @@ import { PLATFORM_NAME, PLUGIN_NAME, DEFAULT_POLLING_INTERVAL } from './settings
 
 /**
  * SleepMe Platform
- * This class manages the plugin lifecycle, device discovery, and accessory management
+ * This class is the entry point for the plugin and manages the plugin lifecycle
  */
 export class SleepMePlatform implements DynamicPlatformPlugin {
+  // References to Homebridge services and characteristics for accessory creation
   public readonly Service: typeof Service;
   public readonly Characteristic: typeof Characteristic;
+  
+  // Scheduler instance to manage temperature scheduling
   public readonly scheduler: SleepMeScheduler;
   
-  // Cached accessories
+  // Array to store cached accessories from Homebridge
   public readonly accessories: PlatformAccessory[] = [];
   
-  // API client
+  // API client for communicating with SleepMe services
   public readonly api: SleepMeApi;
   
-  // Enhanced logger
+  // Enhanced logger for better debugging and error reporting
   public readonly log: EnhancedLogger;
   
-  // Configuration options
+  // Configuration options parsed from config.json
   public readonly debugMode: boolean;
   public readonly pollingInterval: number;
   public readonly temperatureUnit: string;
   
-  // Track managed accessories for cleanup
+  // Map to track active accessory instances for proper cleanup
   private readonly accessoryInstances: Map<string, SleepMeAccessory> = new Map();
   
-  // Timer for periodic discovery
+  // Timer for periodic device discovery
   private discoveryTimer?: NodeJS.Timeout;
   
+  /**
+   * Constructor for the SleepMe platform.
+   * Initializes the platform with configuration from Homebridge
+   * 
+   * @param logger - Homebridge logger instance
+   * @param config - Configuration from config.json
+   * @param homebridgeApi - Reference to the Homebridge API
+   */
   constructor(
     logger: Logger,
     public readonly config: PlatformConfig,
     public readonly homebridgeApi: API
   ) {
-    // Initialize HomeKit service and characteristic references
+    // Store references to Homebridge services and characteristics
     this.Service = this.homebridgeApi.hap.Service;
     this.Characteristic = this.homebridgeApi.hap.Characteristic;
     
-    // Extract configuration options
+    // Parse configuration options with defaults and validation
     this.temperatureUnit = (config.unit as string) || 'C';
     
-    // Set polling interval with proper validation
-    // Use a longer interval by default to reduce API calls
+    // Set polling interval with minimum and maximum bounds for safety
     this.pollingInterval = Math.max(120, Math.min(900, 
       parseInt(String(config.pollingInterval)) || DEFAULT_POLLING_INTERVAL));
     
-    // Set debug and verbose mode
+    // Set debug and verbose mode flags from configuration
     this.debugMode = config.debugMode === true;
     const verboseLogging = config.verboseLogging === true;
     
-    // Set up enhanced logger with correct debug mode and verbosity
+    // Initialize enhanced logger with appropriate verbosity settings
     this.log = new EnhancedLogger(logger, this.debugMode, true, verboseLogging);
     
-    // Validate API token
+    // Validate that the API token is present in the configuration
     if (!config.apiToken) {
       this.log.error('API token missing from configuration! The plugin will not work.', LogContext.PLATFORM);
       throw new Error('API token missing from configuration');
     }
     
-    // Initialize API client
+    // Initialize the SleepMe API client with the provided token
     this.api = new SleepMeApi(config.apiToken as string, this.log);
     
-    // Initialize scheduler
+    // Initialize the scheduler for temperature scheduling features
     this.scheduler = new SleepMeScheduler(
       this.api,
       this.log,
-      this.homebridgeApi.user.persistPath() // This gives the path where data can be stored
+      this.homebridgeApi.user.persistPath() // Storage path for persistent data
     );
     
+    // Log platform initialization information
     this.log.info(
       `Initializing ${PLATFORM_NAME} platform with ${this.temperatureUnit === 'C' ? 'Celsius' : 'Fahrenheit'} ` +
       `units and ${this.pollingInterval}s polling interval`, 
       LogContext.PLATFORM
     );
     
+    // Register for Homebridge events
+    
     // When this event is fired, homebridge has restored all cached accessories
     this.homebridgeApi.on('didFinishLaunching', () => {
-      // Delay device discovery to prevent immediate API calls
+      // Delay device discovery to prevent immediate API calls on startup
       setTimeout(() => {
         this.log.info('Homebridge finished launching, starting device discovery', LogContext.PLATFORM);
         this.discoverDevices();
         
-        // Further delay schedule initialization with a longer timeout
+        // Further delay schedule initialization to prevent overloading the API
         setTimeout(() => {
           this.initializeSchedules();
-        }, 60000); // Increased to 60 seconds
+        }, 60000); // 60 second delay before initializing schedules
       }, 15000); // 15 second delay before starting discovery
       
       // Set up periodic discovery to catch new or changed devices
@@ -113,16 +132,19 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       }, 24 * 60 * 60 * 1000); // Check once per day
     });
     
+    // Handle Homebridge shutdown event for proper cleanup
     this.homebridgeApi.on('shutdown', () => {
       this.log.info('Shutting down platform', LogContext.PLATFORM);
+      
+      // Clear discovery timer
       if (this.discoveryTimer) {
         clearInterval(this.discoveryTimer);
       }
       
-      // Clean up scheduler
+      // Clean up scheduler resources
       this.scheduler.cleanup();
       
-      // Clean up accessories
+      // Clean up accessory resources
       this.accessoryInstances.forEach(accessory => {
         accessory.cleanup();
       });
@@ -130,12 +152,15 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   }
 
   /**
-   * Called when cached accessories are restored at startup
+   * Called by Homebridge when cached accessories are restored at startup
+   * This allows us to reconfigure accessories that were cached by Homebridge
+   * 
+   * @param accessory - The cached accessory to configure
    */
   configureAccessory(accessory: PlatformAccessory): void {
     this.log.info(`Loading accessory from cache: ${accessory.displayName}`, LogContext.PLATFORM);
     
-    // Validate device context
+    // Validate that the device context is intact
     if (!accessory.context.device || !accessory.context.device.id) {
       this.log.warn(
         `Cached accessory ${accessory.displayName} missing device ID, will rediscover`,
@@ -145,19 +170,19 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       this.log.debug(`Cached accessory device ID: ${accessory.context.device.id}`, LogContext.PLATFORM);
     }
     
-    // Store the accessory for later use
+    // Store the accessory in our array for later use
     this.accessories.push(accessory);
   }
   
   /**
-   * Discover SleepMe devices and create accessories with staggered initialization
-   * Modified to use configured devices when available to reduce API calls
+   * Discover SleepMe devices and create HomeKit accessories
+   * Uses staggered initialization to prevent API rate limiting
    */
   async discoverDevices(): Promise<void> {
     this.log.info('Starting device discovery...', LogContext.PLATFORM);
     
     try {
-      // Check if we have devices configured in config.json
+      // Check if devices are configured directly in config.json
       let devices = [];
       const configuredDevices = this.config.devices as Array<{id: string, name: string}> || [];
       
@@ -165,13 +190,14 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
         // Use the devices from config instead of making an API call
         this.log.info(`Using ${configuredDevices.length} devices from configuration`, LogContext.PLATFORM);
         
+        // Map config devices to the format expected by the rest of the code
         devices = configuredDevices.map(device => ({
           id: device.id,
-          name: device.name || `SleepMe Device (${device.id})`, // Provide a default name if not specified
+          name: device.name || `SleepMe Device (${device.id})`, // Default name if not specified
           attachments: [] // Add required fields with default values
         }));
       } else {
-        // Only make API call if no devices are configured
+        // Fetch devices from the API if none configured manually
         this.log.info('No devices in configuration, fetching from API...', LogContext.PLATFORM);
         
         devices = await this.api.getDevices();
@@ -187,13 +213,14 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       
       this.log.info(`Devices to initialize: ${devices.length}`, LogContext.PLATFORM);
       
-      // Track which accessories are still active
+      // Track which accessories are still active to support removal of stale accessories
       const activeDeviceIds = new Set<string>();
       
-      // Process each device with delays between initializations
+      // Process each device with staggered initialization to prevent API rate limiting
       for (let i = 0; i < devices.length; i++) {
         const device = devices[i];
         
+        // Skip devices with missing IDs
         if (!device.id) {
           this.log.warn(`Skipping device with missing ID: ${JSON.stringify(device)}`, LogContext.PLATFORM);
           continue;
@@ -201,17 +228,18 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
         
         // Stagger device initialization to prevent API rate limiting
         if (i > 0) {
-          const staggerDelay = 30000 + Math.floor(Math.random() * 15000); // 30-45 second delay (increased)
+          const staggerDelay = 30000 + Math.floor(Math.random() * 15000); // 30-45 second delay
           this.log.info(`Waiting ${Math.round(staggerDelay/1000)}s before initializing next device...`, LogContext.PLATFORM);
           await new Promise(resolve => setTimeout(resolve, staggerDelay));
         }
         
+        // Mark this device ID as active
         activeDeviceIds.add(device.id);
         
-        // Use device name directly from API or config
+        // Use device name from API or config
         const displayName = device.name;
         
-        // Generate a unique id for this device
+        // Generate a unique identifier for this device in HomeKit
         const uuid = this.homebridgeApi.hap.uuid.generate(device.id);
         
         // Check if we already have an accessory for this device
@@ -230,15 +258,15 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
             this.log.debug(`Updated accessory name to: ${displayName}`, LogContext.PLATFORM);
           }
           
-          // Update platform accessories
+          // Update platform accessories in Homebridge
           this.homebridgeApi.updatePlatformAccessories([existingAccessory]);
           
-          // Create new accessory handler with delay
+          // Initialize the accessory handler with a delay to prevent API overload
           setTimeout(() => {
             this.initializeAccessory(existingAccessory, device.id);
           }, 3000); // 3 second delay
         } else {
-          // Create a new accessory
+          // Create a new accessory since one doesn't exist
           this.log.info(`Adding new accessory: ${displayName} (ID: ${device.id})`, LogContext.PLATFORM);
           
           const accessory = new this.homebridgeApi.platformAccessory(displayName, uuid);
@@ -246,12 +274,12 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
           // Store device info in the accessory context
           accessory.context.device = device;
           
-          // Initialize the accessory with delay
+          // Initialize the accessory with delay to prevent API overload
           setTimeout(() => {
             this.initializeAccessory(accessory, device.id);
           }, 3000); // 3 second delay
           
-          // Register the accessory
+          // Register the accessory with Homebridge
           this.homebridgeApi.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
           this.accessories.push(accessory);
         }
@@ -268,9 +296,13 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
       );
     }
   }
+  
   /**
    * Initialize an accessory with its handler
-   * Updated to connect scheduler events to the accessory
+   * Handles connecting scheduler events to the accessory
+   * 
+   * @param accessory - The platform accessory to initialize
+   * @param deviceId - The device ID for this accessory
    */
   private initializeAccessory(accessory: PlatformAccessory, deviceId: string): void {
     this.log.info(`Initializing accessory for device ID: ${deviceId}`, LogContext.PLATFORM);
@@ -293,12 +325,15 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   
   /**
    * Create a new accessory handler
+   * 
+   * @param accessory - The platform accessory to create a handler for
+   * @param deviceId - The device ID for this accessory
    */
   private createAccessoryHandler(accessory: PlatformAccessory, deviceId: string): void {
     // Create new accessory handler
     const handler = new SleepMeAccessory(this, accessory, this.api);
     
-    // Listen for scheduled events from the scheduler
+    // Connect the handler to scheduler events
     this.scheduler.on('scheduledEventExecuted', (eventData: { deviceId: string, temperature: number, state: string }) => {
       if (eventData.deviceId === deviceId) {
         handler.handleScheduledEvent(eventData);
@@ -310,7 +345,10 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   }
   
   /**
-   * Clean up accessories that are no longer available
+   * Clean up accessories that are no longer active
+   * Removes accessories from Homebridge that don't match active device IDs
+   * 
+   * @param activeDeviceIds - Set of active device IDs
    */
   private cleanupInactiveAccessories(activeDeviceIds: Set<string>): void {
     // Find accessories to remove - those not in the active devices list
@@ -321,6 +359,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     
     if (accessoriesToRemove.length > 0) {
       this.log.info(`Removing ${accessoriesToRemove.length} inactive accessories`, LogContext.PLATFORM);
+      
       // Clean up each accessory
       for (const accessory of accessoriesToRemove) {
         const deviceId = accessory.context.device?.id;
@@ -352,10 +391,11 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   }
   
   /**
-   * Initialize schedules from configuration
+   * Initialize temperature schedules from configuration
+   * Creates schedules based on the config.json settings
    */
   private initializeSchedules(): void {
-    // Check for enabled scheduling
+    // Check if scheduling is enabled in configuration
     const enableScheduling = this.config.enableScheduling === true;
     const schedules = this.config.schedules as Array<any> || [];
     
@@ -367,7 +407,7 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
     this.log.info('Initializing schedules from config', LogContext.PLATFORM);
     
     try {
-      // Get device IDs
+      // Get device IDs from either configured devices or cached accessories
       const deviceIds: string[] = [];
       
       // Process device-specific schedules or apply to all devices
@@ -390,9 +430,9 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
         });
       }
       
-      // Create schedules for each device
+      // Create schedules for each device with staggered timing to prevent API overload
       deviceIds.forEach((deviceId, index) => {
-        // Stagger schedule initialization to prevent API rate limiting
+        // Add delay between initializing schedules for different devices
         setTimeout(() => {
           this.createDeviceSchedule(deviceId, schedules);
         }, index * 20000); // 20 second delay between devices
@@ -406,21 +446,24 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
   }
   
   /**
-   * Create schedule for a specific device
+   * Create a schedule for a specific device
+   * 
+   * @param deviceId - The device ID to create a schedule for
+   * @param schedules - Array of schedule configurations
    */
   private createDeviceSchedule(deviceId: string, schedules: any[]): void {
     this.log.info(`Creating schedule for device ${deviceId}`, LogContext.PLATFORM);
     
-    // Create schedule structure
+    // Create the schedule structure
     const schedule: DeviceSchedule = {
       deviceId,
       events: [],
       enabled: true
     };
     
-    // Process schedule items
+    // Process each schedule item from configuration
     for (const item of schedules) {
-      // Convert day type to day array
+      // Convert day type to array of day numbers (0-6, where 0 is Sunday)
       let days: number[] = [];
       switch (item.dayType) {
         case 'everyday':
@@ -440,9 +483,9 @@ export class SleepMePlatform implements DynamicPlatformPlugin {
           days = [0, 1, 2, 3, 4, 5, 6]; // Default to all days
       }
       
-      // Create event
+      // Create the scheduled event
       const event: ScheduledEvent = {
-        id: `evt_${Math.random().toString(36).substring(2, 15)}`,
+        id: `evt_${Math.random().toString(36).substring(2, 15)}`, // Generate a random ID
         enabled: true, // Default to enabled
         time: item.time,
         temperature: item.temperature,
