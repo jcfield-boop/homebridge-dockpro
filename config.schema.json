@@ -195,16 +195,7 @@
           "type": "number"
         },
         "debugMode",
-        "verboseLogging",
-        {
-          "key": "devices",
-          "type": "array",
-          "buttonText": "Add Device",
-          "items": [
-            "devices[].id",
-            "devices[].name"
-          ]
-        }
+        "verboseLogging"
       ]
     }
   ]
