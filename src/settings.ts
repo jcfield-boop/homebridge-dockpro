@@ -20,7 +20,7 @@ export const API_BASE_URL = 'https://api.developer.sleep.me/v1';
 /**
  * Default polling interval in seconds
  */
-export const DEFAULT_POLLING_INTERVAL = 120;
+export const DEFAULT_POLLING_INTERVAL = 60;
 
 /**
  * Minimum allowed temperature in Celsius
