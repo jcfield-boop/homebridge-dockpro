@@ -5,7 +5,7 @@
 import { Logger } from 'homebridge';
 
 /**
- * Logger context types for more detailed logging
+ * Logger context types for categorizing log messages
  */
 export enum LogContext {
   PLATFORM = 'PLATFORM',
@@ -20,12 +20,11 @@ export enum LogContext {
  * Log levels to control verbosity
  */
 export enum LogLevel {
-  ERROR = 0,
-  WARN = 1,
-  INFO = 2,
-  DEBUG = 3,
-  VERBOSE = 4,
-  API_DETAIL = 5
+  ERROR = 0,  // Always shown
+  WARN = 1,   // Warnings
+  INFO = 2,   // Normal information
+  DEBUG = 3,  // Detailed debugging info
+  VERBOSE = 4 // Very detailed logs
 }
 
 /**
@@ -51,11 +50,11 @@ export class EnhancedLogger {
     logLevelInput: string | boolean | {debugMode?: boolean, verboseLogging?: boolean} = 'normal',
     private readonly timestampEnabled = true
   ) {
-    // Convert any string input to a valid LogLevel
+    // Convert any input format to a valid LogLevel
     this.logLevel = this.determineLogLevel(logLevelInput);
     
     // Log the selected level on startup
-    const levelNames = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'VERBOSE', 'API_DETAIL'];
+    const levelNames = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'VERBOSE'];
     this.info(`Logger initialized at ${levelNames[this.logLevel]} level`, LogContext.PLATFORM);
   }
   
@@ -71,6 +70,7 @@ export class EnhancedLogger {
       switch (input.toLowerCase()) {
         case 'verbose': return LogLevel.VERBOSE;
         case 'debug': return LogLevel.DEBUG;
+        case 'api_detail': return LogLevel.VERBOSE; // Map api_detail to VERBOSE for simplicity
         case 'normal': 
         default: return LogLevel.INFO;
       }
@@ -152,88 +152,25 @@ export class EnhancedLogger {
   
   /**
    * Log a verbose debug message (only in verbose mode)
-   * Modified to improve visibility in logs
    */
   public verbose(message: string, context?: LogContext): void {
     if (this.logLevel >= LogLevel.VERBOSE) {
-      // Don't prepend "VERBOSE:" as it makes logs harder to read
+      // Use debug level for verbose messages to avoid cluttering output
       this.logger.debug(this.formatMessage(message, context));
     }
   }
   
   /**
-   * NEW: Log detailed API information (only in highest verbosity mode)
-   * For extremely detailed debugging of API calls, parameters, responses, etc.
+   * API detail logging - maps to verbose level for simplicity
    */
   public apiDetail(message: string): void {
-    if (this.logLevel >= LogLevel.API_DETAIL) {
+    if (this.logLevel >= LogLevel.VERBOSE) {
       this.logger.debug(this.formatMessage(`API_DETAIL: ${message}`, LogContext.API));
     }
   }
   
   /**
-   * Log a HomeKit interaction
-   */
-  public homekit(action: string, characteristic: string, value?: any): void {
-    if (this.logLevel >= LogLevel.DEBUG) {
-      const message = `HomeKit ${action}: ${characteristic}` + 
-        (value !== undefined ? ` → ${JSON.stringify(value)}` : '');
-      
-      this.debug(message, LogContext.HOMEKIT);
-    }
-  }
-  
-  /**
-   * Log an API request or response
-   */
-  public api(method: string, endpoint: string, status?: number, data?: any): void {
-    // Always log completed requests (with status)
-    if (status) {
-      const message = `${method} ${endpoint} (Status: ${status})`;
-      this.info(message, LogContext.API);
-      
-      // Only log data at verbose level or higher
-      if (data && this.logLevel >= LogLevel.VERBOSE) {
-        try {
-          this.verbose(`${method} ${endpoint} data: ${JSON.stringify(data)}`, LogContext.API);
-        } catch {
-          this.verbose(`${method} ${endpoint} data: [Cannot stringify data]`, LogContext.API);
-        }
-      }
-    } else {
-      // Starting requests logged at info level
-      if (this.logLevel >= LogLevel.INFO) {
-        this.info(`${method} ${endpoint}`, LogContext.API);
-      }
-    }
-  }
-  
-  /**
-   * Log API wait/throttling information
-   * Only logs at API_DETAIL level to reduce noise
-   */
-  public apiWait(message: string): void {
-    if (this.logLevel >= LogLevel.API_DETAIL) {
-      this.debug(`Wait: ${message}`, LogContext.API);
-    }
-  }
-  
-  /**
-   * Log accessory state
-   */
-  public state(deviceId: string, state: Record<string, any>): void {
-    this.debug(`Device ${deviceId} state: ${JSON.stringify(state)}`, LogContext.ACCESSORY);
-  }
-  
-  /**
-   * Get current log level
-   */
-  public getLogLevel(): LogLevel {
-    return this.logLevel;
-  }
-
-  /**
-   * NEW: Check if verbose logging is enabled
+   * Check if verbose logging is enabled
    * Utility method to avoid unnecessary string concatenation in verbose logs
    */
   public isVerboseEnabled(): boolean {
@@ -241,9 +178,10 @@ export class EnhancedLogger {
   }
 
   /**
-   * NEW: Check if API detail logging is enabled
+   * Check if API detail logging is enabled
+   * For backward compatibility, maps to verbose level
    */
   public isApiDetailEnabled(): boolean {
-    return this.logLevel >= LogLevel.API_DETAIL;
+    return this.logLevel >= LogLevel.VERBOSE;
   }
 }
